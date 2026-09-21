@@ -71,7 +71,7 @@ jobs:
           if (-not $bridge.Contains("diceya11y_bridge_marker")) { throw "The bridge has no marker export; installers would refuse it." }
           if (-not (Test-Path installer/DiceyDungeonsAccessibilityInstaller.exe)) { throw "installer exe missing" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: DiceyA11y
           path: DiceyA11y-v*.zip
