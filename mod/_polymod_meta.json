@@ -1,0 +1,8 @@
+{
+	"title":"Dicey Dungeons Accessibility",
+	"description":"Speaks combat and run state aloud through a screen reader. Requires the DiceyA11y companion launcher.",
+	"author":"DiceyA11y",
+	"api_version":"1.0",
+	"mod_version":"0.1.0",
+	"license":"MIT"
+}

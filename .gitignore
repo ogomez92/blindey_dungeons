@@ -1,0 +1,17 @@
+# Build output
+companion/bin/
+companion/obj/
+release/
+DiceyA11y*.zip
+__pycache__/
+
+# Runtime logs and settings written next to the executable
+*.log
+DiceyA11y.cfg
+
+# Cloned game source is copyrighted material: reference only, never shipped.
+game_src/
+
+# Bridge build output and a local safety copy of the game's own lime.ndll (copyrighted)
+bridge/bin/
+bridge/orig-backup/
