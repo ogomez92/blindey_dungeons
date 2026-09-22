@@ -106,6 +106,8 @@ public sealed class HotkeyHook : IDisposable
     private readonly Dictionary<Chord, Action> _bindings = new();
     private readonly Dictionary<Chord, (Action Down, Action Up)> _heldBindings = new();
     private readonly Dictionary<int, Action> _heldDown = new();   // vk -> release action, while held
+    private readonly Dictionary<int, Action> _observed = new();   // vk -> action; the key goes on to the game
+    private readonly HashSet<int> _observedDown = new();
     private readonly BlockingQueue _ordered = new();
     private readonly Func<bool> _shouldHandle;
     private readonly Action<string> _log;
@@ -137,6 +139,13 @@ public sealed class HotkeyHook : IDisposable
     /// </summary>
     public void BindHeld(int virtualKey, Action down, Action up, bool shift = false, bool control = false)
         => _heldBindings[new Chord(virtualKey, shift, control)] = (down, up);
+
+    /// <summary>
+    /// A key the mod reacts to without taking it: Left Control stops speech the way it does
+    /// in a screen reader, and must still work as the Control of Control+D and Alt+Tab.
+    /// Runs once per press, whatever the auto-repeat.
+    /// </summary>
+    public void BindObserved(int virtualKey, Action handler) => _observed[virtualKey] = handler;
 
     public IEnumerable<Chord> Bindings => _bindings.Keys;
 
@@ -180,6 +189,7 @@ public sealed class HotkeyHook : IDisposable
         {
             // Released even if focus has moved away since: a button must never stay stuck.
             var up = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+            lock (_observedDown) _observedDown.Remove((int)up.vkCode);
             Action? release;
             lock (_heldDown) { _heldDown.Remove((int)up.vkCode, out release); }
             if (release == null) return CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -196,6 +206,14 @@ public sealed class HotkeyHook : IDisposable
             lock (_heldDown)
             {
                 if (_heldDown.ContainsKey((int)data.vkCode)) return 1;   // auto-repeat of a held key
+            }
+            if (_observed.TryGetValue((int)data.vkCode, out var observe))
+            {
+                bool first;
+                lock (_observedDown) first = _observedDown.Add((int)data.vkCode);
+                if (first && (!ScopeToGameWindow || GameWindowFocused()) && _shouldHandle())
+                    ThreadPool.QueueUserWorkItem(_ => { try { observe(); } catch (Exception ex) { _log($"Key observer failed: {ex.Message}"); } });
+                return CallNextHookEx(_hook, nCode, wParam, lParam);
             }
             var chord = new Chord(
                 (int)data.vkCode,
@@ -287,6 +305,7 @@ public sealed class HotkeyHook : IDisposable
         public const int Enter = 0x0D, Escape = 0x1B, Space = 0x20, Tab = 0x09, Backspace = 0x08;
         public const int Comma = 0xBC, Period = 0xBE;   // VK_OEM_COMMA, VK_OEM_PERIOD
         public const int F11 = 0x7A, PageUp = 0x21, PageDown = 0x22, Home = 0x24, End = 0x23;
+        public const int LeftControl = 0xA2;   // VK_LCONTROL: a low-level hook reports the side
         public static int Letter(char c) => char.ToUpperInvariant(c);
     }
 

@@ -39,7 +39,17 @@ public sealed class BarterHandler : CardScreenHandler
         _offer = offer;
         _theirs = v[1].AsString();
         _ownedBefore = BackpackHandler.Owns(ctx, _theirs);
-        if (v[0].Exists && v[1].Exists) ctx.SayEvent(DescribeOffer(ctx));
+        if (v[0].Exists && v[1].Exists)
+        {
+            ctx.SayEvent(DescribeOffer(ctx));
+            // The item list follows the offer (it kept the map's lines: Ctrl+Up here once read "your space, 1 of 2").
+            ctx.FocusItem(new[]
+            {
+                Strings.T("barter.give", CardText.Full(ctx, Scene + ".yourdeal", withSize: true)),
+                Strings.T("barter.get", CardText.Full(ctx, Scene + ".theirdeal", withSize: true)),
+                Strings.T("barter.keys"),
+            });
+        }
     }
 
     /// <summary>The deal is struck with a handshake animation and straight back to the map: say how it ended.</summary>

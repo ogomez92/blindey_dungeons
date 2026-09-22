@@ -114,9 +114,10 @@ public sealed class BridgeClient : IDisposable
     private readonly object _scopeLock = new();
     private Dictionary<string, string>? _cache;
     private int _cacheThread;
-    private List<string> _learned = new();
+    // One learned list per key: the poll's and a key press's scopes alternate, and a single
+    // list made each wipe the other's (every poll after an arrow key then cost 600 ms).
+    private readonly Dictionary<string, List<string>> _learned = new();
     private readonly HashSet<string> _asked = new();
-    private string _learnedFor = "";
 
     private static bool IsPureRead(string command, string argument)
     {
@@ -156,14 +157,15 @@ public sealed class BridgeClient : IDisposable
         }
         if (learnKey != null)
         {
-            if (learnKey != _learnedFor) { _learned = new(); _learnedFor = learnKey; }
-            Warm(_learned.Select(k => { var tab = k.IndexOf('\t'); return (k[..tab], k[(tab + 1)..]); }));
+            List<string> known;
+            lock (_scopeLock) known = _learned.TryGetValue(learnKey, out var list) ? list : new List<string>();
+            Warm(known.Select(k => { var tab = k.IndexOf('\t'); return (k[..tab], k[(tab + 1)..]); }));
         }
         return new Scope(() =>
         {
             lock (_scopeLock)
             {
-                if (learnKey != null) _learned = _asked.ToList();
+                if (learnKey != null) _learned[learnKey] = _asked.ToList();
                 _cache = null;
             }
         });

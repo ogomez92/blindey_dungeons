@@ -56,6 +56,12 @@ public sealed class ScreenContext
         if (!string.IsNullOrWhiteSpace(text)) Speech.Say(text, interrupt);
     }
 
+    /// <summary>A focus echo spoken after the announcements already queued, in their order.</summary>
+    public void SayAfterEvents(string text)
+    {
+        if (!string.IsNullOrWhiteSpace(text)) Speech.SayAfterEvents(text);
+    }
+
     /// <summary>
     /// Something gained focus: its details fill the item list, which becomes the current
     /// review list, so Ctrl+Up reads about what the player is on without hunting for it.

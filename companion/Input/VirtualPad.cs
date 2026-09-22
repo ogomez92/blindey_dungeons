@@ -10,7 +10,7 @@ public enum PadButton
 }
 
 /// <summary>A key as the screen handlers see it, before it becomes a gamepad button.</summary>
-public enum NavKey { Up, Down, Left, Right, Confirm, Back, X, Y, LeftShoulder, RightShoulder, Start, Select, Snap, PreviousItem, NextItem, Path }
+public enum NavKey { Up, Down, Left, Right, Confirm, Back, X, Y, LeftShoulder, RightShoulder, Start, Select, Snap, PreviousItem, NextItem, Path, EnemyNext, EnemyPrevious }
 
 /// <summary>The status shortcuts: Ctrl+D, Ctrl+H, Ctrl+E.</summary>
 public enum StatusKind { Dice, Health, Enemies }

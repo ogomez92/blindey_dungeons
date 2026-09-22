@@ -99,27 +99,34 @@ public sealed class ScreenReaderOutput : IDisposable
     }
 
     /// <summary>On-demand readouts and focus echoes. Not recorded as an event.</summary>
-    public void Say(string text, bool interrupt = false) => Enqueue(text, interrupt, isEvent: false);
+    public void Say(string text, bool interrupt = false) => Enqueue(text, interrupt, inEventQueue: false, record: false);
+
+    /// <summary>
+    /// A focus echo that must come after the events already queued: the screen's own text
+    /// was just announced and the button belongs after it ("You get an extra dice. Take"),
+    /// not jumping ahead of it through the priority queue. Not recorded as an event.
+    /// </summary>
+    public void SayAfterEvents(string text) => Enqueue(text, interrupt: false, inEventQueue: true, record: false);
 
     /// <summary>
     /// Unsolicited announcements (combat, screen changes, story). Recorded in the
     /// Events buffer and the event log so bug reports have something to point at.
     /// </summary>
-    public void SayEvent(string text) => Enqueue(text, interrupt: false, isEvent: true);
+    public void SayEvent(string text) => Enqueue(text, interrupt: false, inEventQueue: true, record: true);
 
-    private void Enqueue(string text, bool interrupt, bool isEvent)
+    private void Enqueue(string text, bool interrupt, bool inEventQueue, bool record)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         var cleaned = TextCleanup.Clean(text);
         if (string.IsNullOrWhiteSpace(cleaned)) return;
 
-        if (isEvent) EventSpoken?.Invoke(cleaned);
+        if (record) EventSpoken?.Invoke(cleaned);
         if (!_running) return;
 
         // Never interrupt by default: combat events arrive in bursts and interrupting
         // throws away information the player has no other way to get.
-        var utterance = new Utterance(cleaned, interrupt && _config.AllowInterrupt, isEvent);
-        if (isEvent) _events.Enqueue(utterance); else _priority.Enqueue(utterance);
+        var utterance = new Utterance(cleaned, interrupt && _config.AllowInterrupt, record);
+        if (inEventQueue) _events.Enqueue(utterance); else _priority.Enqueue(utterance);
         _pending.Release();
     }
 

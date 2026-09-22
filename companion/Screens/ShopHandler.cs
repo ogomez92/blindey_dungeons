@@ -35,12 +35,11 @@ public sealed class ShopHandler : CardScreenHandler
         return Enumerable.Range(0, count).Select(i => $"{Contents}[{i}].equipment");
     }
 
+    /// <summary>Gold and how much is on offer; the wares themselves are met with the arrows (reading them all first was too long).</summary>
     protected override void OnEntryRead(ScreenContext ctx)
     {
         base.OnEntryRead(ctx);
-        var wares = Enumerable.Range(0, Cards.Count)
-            .Select(i => TextCleanup.Join(CardText.Name(ctx, Cards[i].Expression), Price(ctx, Cards[i]))).ToList();
-        ctx.SayEvent(Strings.T("shop.summary", Gold(ctx), wares.Count == 0 ? Strings.T("pack.none") : string.Join("; ", wares)));
+        ctx.SayEvent(Strings.T("shop.summary", Gold(ctx), Cards.Count) + " " + Strings.T("shop.browse"));
     }
 
     public override void OnPoll(ScreenContext ctx)

@@ -92,7 +92,8 @@ Active only while the Dicey Dungeons window has focus.
 | **Q**, **W** | Shoulder buttons |
 | **F11** | Pause menu (Start): continue, options, mods |
 | **Backspace** | Back/Select button |
-| **Tab** (hold) | In battle: look at the enemy's cards, read in full |
+| **Tab**, **Shift+Tab** | In battle: the enemy's cards one at a time, forwards and back |
+| **Left Control** | Stops speech |
 
 When the game shows a gamepad button in a prompt, the mod says the key instead
 ("press Enter again to choose your dice").
@@ -103,9 +104,11 @@ Arrow keys move between your cards; each is read with its text and what dice it 
 Enter picks the card; now the arrows move between your dice, and each is read with what
 the card would do with it ("dice 5. Does 5 damage"). Enter plays it, Escape backs out.
 **E** ends your turn. Damage, healing, status effects, what the enemy plays and whose turn
-it is are spoken as they happen. **Tab** reads the enemy's cards.
+it is are spoken as they happen. A status effect is explained the first time it appears in a
+fight ("Frog shield 3. Blocks the opponent's damage"). **Tab** reads the enemy's cards one at
+a time, **Shift+Tab** goes back.
 
-- **W** uses your limit break once the mod says it is ready (Enter confirms, Escape cancels).
+- **W** uses your limit break once the mod says it is ready (Enter activates, Escape cancels).
 - **Backspace** asks to flee the fight.
 - **Thief**: the stolen card is one of your cards and changes every turn ("You stole …").
 - **Robot**: move right to the CPU panel and press Enter to ask for a dice. You hear the

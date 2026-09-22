@@ -61,9 +61,10 @@ public sealed class BlacksmithHandler : ScreenHandler
         var modeChanged = !_first && _cursor.Split('|')[0] != state.Split('|')[0];
         _cursor = state;
         _first = false;
-        var text = DescribeCell(ctx);
+        var text = DescribeCell(ctx, out var lines);
         if (modeChanged) text = Strings.T(InPack(ctx) ? "pack.area.pack" : "pack.area.equipped") + ". " + text;
         ctx.Say(text, interrupt: RecentInput(ctx));
+        ctx.FocusItem(lines);
     }
 
     protected override string CursorState(ScreenContext ctx)
@@ -74,23 +75,41 @@ public sealed class BlacksmithHandler : ScreenHandler
 
     private bool InPack(ScreenContext ctx) => ctx.Bridge.Eval(Scene + ".upgradefrom").AsString() == "backpack";
 
-    private string DescribeCell(ScreenContext ctx)
+    /// <summary>
+    /// What is said: the card's name, its place, and what the upgrade changes (the upgraded
+    /// name and rules text; its slots only when they differ). The item list holds the whole
+    /// of both cards: the card as it is first, then as it would become. Reading both in full
+    /// on every arrow key was too long to listen to.
+    /// </summary>
+    private string DescribeCell(ScreenContext ctx, out List<string> lines)
     {
         var v = ctx.Bridge.Batch(Scene + ".gamepad_column", Scene + ".gamepad_row");
         var container = InPack(ctx) ? "{Inventory}.backpack" : "{Inventory}.equipmentslots";
         var card = $"{container}.getitem({v[0].AsInt()},{v[1].AsInt()}).equipment";
         var place = Strings.T("pack.cell_short", v[0].AsInt() + 1, v[1].AsInt() + 1);
         var now = CardText.Full(ctx, card, withSize: true);
+        lines = new List<string>();
         if (now.Length == 0) return Strings.T("pack.empty") + ". " + place;
-        if (_copy) return TextCleanup.JoinSentences(now, Strings.T("copy.hint"), place);
+        lines.Add(now);
+        var name = CardText.Name(ctx, card);
+        if (_copy) { lines.Add(place); return TextCleanup.JoinSentences(name, Strings.T("copy.hint"), place); }
 
         var upgraded = Scene + ".upgradedversion";
         var same = ctx.Bridge.Eval(upgraded + ".name").AsString() == ctx.Bridge.Eval(card + ".name").AsString();
-        var after = same ? CardText.Full(ctx, upgraded, withSize: true) : "";
         var already = ctx.Bridge.Eval(card + ".upgraded").AsBool();
-        return TextCleanup.JoinSentences(now,
-            already ? Strings.T("smith.already") : after.Length > 0 ? Strings.T("smith.becomes", after) : Strings.T("smith.cannot"),
-            place);
+        string verdict;
+        if (already) verdict = Strings.T("smith.already");
+        else if (!same) verdict = Strings.T("smith.cannot");
+        else
+        {
+            var afterSlots = CardText.Slots(ctx, upgraded);
+            var brief = TextCleanup.JoinSentences(CardText.Name(ctx, upgraded), CardText.Description(ctx, upgraded),
+                                                  afterSlots != CardText.Slots(ctx, card) ? afterSlots : null);
+            verdict = Strings.T("smith.becomes", brief);
+            lines.Add(Strings.T("smith.upgraded", CardText.Full(ctx, upgraded, withSize: true)));
+        }
+        lines.Add(place);
+        return TextCleanup.JoinSentences(name, place, verdict);
     }
 
     private bool IsPopup(ScreenContext ctx) => ctx.Bridge.Eval(Scene + ".numbought").AsInt() > 0;
@@ -103,7 +122,7 @@ public sealed class BlacksmithHandler : ScreenHandler
         return TextCleanup.JoinSentences(Strings.T(_copy ? "copy.done" : "smith.done", card), Strings.T("smith.continue"));
     }
 
-    public override string DescribeFocus(ScreenContext ctx) => IsPopup(ctx) ? DescribePopup(ctx) : DescribeCell(ctx);
+    public override string DescribeFocus(ScreenContext ctx) => IsPopup(ctx) ? DescribePopup(ctx) : DescribeCell(ctx, out _);
 
     public override string DescribeContext(ScreenContext ctx)
         => TextCleanup.JoinSentences(Strings.T(_copy ? "copy.intro" : "smith.intro"), DungeonHandler.PlayerStatus(ctx));

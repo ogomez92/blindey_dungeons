@@ -136,9 +136,15 @@ Left13 Right14. Axes: 0/1 left stick, 2/3 right stick.
 Keys are held and released on the pad as pressed, so the game's own hold-to-repeat
 applies. The keyboard hook swallows them, so nothing acts twice. Default map: arrows =
 d-pad, Enter/Space = A, Escape = B, E = X, R = Y, Q/W = shoulders, F11 = Start,
-Backspace = Back, Tab = right stick up (enemy card preview in battle). Space is A everywhere but
+Backspace = Back. Space is A everywhere but
 the map (there it recentres the map cursor); comma, period and P exist only for the map and
-never reach the pad. Ctrl+D / Ctrl+H / Ctrl+E read dice, health and enemy health. The title's own
+never reach the pad. Tab / Shift+Tab are the mod's own (`NavKey.EnemyNext/EnemyPrevious`):
+in battle they read the enemy's cards one at a time from the card objects. (Tab used to hold
+the right stick up, which is the game's on-screen preview: every card was read in one go, and
+the release handler slept 1.6 s on the key-action queue, so the next arrow waited behind it.)
+Left Control stops speech through `HotkeyHook.BindObserved`: the hook runs the action and
+passes the key on, so it is still the Control of Ctrl+D and Alt+Tab.
+Ctrl+D / Ctrl+H / Ctrl+E read dice, health and enemy health. The title's own
 "(Esc) Options" hint is therefore wrong under the mod; `StageCleaner` rewrites it to F11.
 
 **Both stick axes must be set in the same frame** (one `batch`). With x set a frame
@@ -178,8 +184,15 @@ that follow from it:
 - A read that must be instant when the player presses a key has to be made on *every*
   poll, not only when the cursor moves, or it will not be in the prefetch. That is why
   `CombatHandler.OnPoll` describes the selected card each time and throws it away.
+- Learned lists are kept **per key** (`poll:<scene>`, `key:<scene>`): a key press has a
+  learning scope of its own, so the handler's reads (card list, floor) cost one frame. With
+  one shared list the two scopes wiped each other and every poll after an arrow key cost
+  600 ms (measured 2026-09-22, then fixed: 3-20 ms after the first key on a screen).
+- The poll loop waits on `_wake` (20 ms) and a key press sets it, so what the key changed is
+  read on the very next frame instead of after the pause.
 - `tools/latency.py Right Left ...` measures key-to-speech; `tools/bridgeperf.py` the raw
-  round trip; the log says `Slow poll` with the reads that were not sent ahead.
+  round trip; the log says `Slow poll` with the reads that were not sent ahead. Set
+  `DICEY_LOG` to the installed copy's log when testing that one.
 
 ### Review lists (`BufferManager`)
 
@@ -194,7 +207,20 @@ Every scene without a dedicated handler gets: its name, its text, the focused co
 on focus change the label (plus same-row text and role for sliders, state for known
 checkboxes); any text that newly appears. This is what reads the title, options,
 credits, cutscenes, item pickup, character select, episode select and the end-of-run
-screen today.
+screen today. Rules learned from the second play-test:
+
+- **Speech order.** Focus echoes go through the priority queue and jump ahead of events.
+  A focus echo made in the same poll as newly read text goes through `SayAfterEvents`
+  (events queue, not recorded) so "You get an extra dice" is heard before "Take".
+- **The same caption at another place** is only news once it rests and its old place is
+  empty (`SameButtonMoving`, `ButtonAt`): a popup sliding away with its OK still focused was
+  heard as "Ok, 1 of 2. Ok, 1 of 2. Ok" (FocusKey carries the position while twins exist).
+- **A lone button is what Enter does**: `PressEnterTo` says "Press Enter to take" / "Pulsa
+  Intro para coger"; short labels stay "Ok, press Enter".
+- Tutorial lines that point at the screen get the key appended (`TutorialHints`: R for the
+  inventory, Tab for the enemy's moves), matched on the cleaned text in en and es.
+- The map's node prompts ("MEJORAR", "ABRIR", "A LUCHAR") are drawn text, not nav buttons:
+  `activebutton` is null there, and they are read as paragraphs.
 
 ---
 
@@ -215,11 +241,13 @@ of arrows picks (`_fork`). Direction words go by the signs of the offset, not it
 "up right" is always Up and Right in either order. (A first version searched a cone for
 the nearest node; an exit spoken as "up right" lies 27 degrees above the horizontal and did
 not answer to Up, which the player rightly called unreliable.) Comma/period cycle the points
-of interest (exits, then the rest with Dijkstra routes that avoid fights), Space snaps the
-cursor back, P walks to the cursor one stick push per landed step (any key, a menu or a
-blocking enemy ends it), Enter walks when the cursor is one step away and is the game's A
-on the player's own node. An enemy blocks onward movement until fought; a step
-that goes nowhere is announced. (This replaced a Left/Right-destination, Up-to-step scheme
+of interest (non-empty spaces: exits first, then the rest with Dijkstra routes that avoid
+fights; empty neighbours were once in the cycle and sounded like "empty spaces marked as
+POIs"), Space snaps the cursor back, P walks to the cursor one stick push per landed step
+(any key, a menu or a blocking enemy ends it), Enter walks when the cursor is one step away
+and is the game's A on the player's own node. An enemy blocks onward movement until fought;
+a step that goes nowhere is announced, and when the block is an enemy the cursor snaps to
+the player's space (`_blockedOn`) so Enter is the fight, not "that is 3 steps away". (This replaced a Left/Right-destination, Up-to-step scheme
 after the first blind play-test.) Chest contents (`GraphNode.item`) are deliberately never spoken:
 they are not shown on screen.
 
@@ -239,9 +267,13 @@ Left/Right across, after writing `gamepad_preferredrow` = the card's `displayrow
 what picks between two stacked cards - verified), so the game's click and highlight follow.
 A first version only wrote `gamepad_selectedequipment`: it worked but was silent, and the
 player missed the click at once. There is no such write any more: the game undoes it every
-frame for a card it refuses. `AwaitingListMove` gives the cursor 250 ms to arrive; if it does
-not, the card leaves the list for the turn (`_refused`), the log says `Card list: the game kept
-the cursor on ...`, and the player hears where the cursor still is. Keys stay with the game in
+frame for a card it refuses. `AwaitingListMove` gives the cursor 300 ms to arrive; if it does
+not, the same button is pressed once more (the game let a press pass in the moment after a card
+was played, while the used card slid away, and Combat Roll was dropped from the list that way in
+the second play-test; `Combat.state` stays `playerturn:allocatedice` through that animation, so
+the state cannot be the guard), and only after a second miss does the card leave the list for
+the turn (`_refused`), the log says `Card list: the game kept the cursor on ... twice`, and the
+player hears where the cursor still is. Keys stay with the game in
 dice mode, in `gamepad_buttonmode`, under prompts, with a textbox open, and when several
 buttons are up (jackpot prizes, the six request dice); a panel with ONE focused button (the
 Robot's Calculate focuses as soon as the cursor is on the panel) is just a list item, because
@@ -264,7 +296,11 @@ state stays `playerturn:allocatedice` for ~2 s while cards slide away: the curso
 quiet for that time. Dead arrow keys repeat the speech line on screen when a textbox is
 open (`Tutorial.textboxes[*].actualtextbox.dismissed`, `Art.textboxmap`: **HYPOTHESIS**,
 seen only empty) or before the dice are thrown. The pause menu over a battle silences the
-card cursor entirely (`_paused`).
+card cursor entirely (`_paused`); its buttons stay registered for a moment after Continue, so
+`AnnounceChoices` ignores labels seen while paused and the 1.5 s after it closes (it once said
+"Choose a prize: Continue, Options, Back to title"). A status that appears on a fighter is
+explained once per battle with its own rules text (`StatusInfo.Description`, from
+`status[i].description`): "You frozen" alone told the player nothing.
 
 **After a battle (`LevelUpHandler`)** — rewards are drawn as star and coin pictures, so
 `LevelUpScreen.lastbattleexpreward`, `lastbattlegoldreward`, `nextlevelexp` are read (once

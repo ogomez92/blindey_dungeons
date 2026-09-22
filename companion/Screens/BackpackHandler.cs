@@ -94,9 +94,10 @@ public sealed class BackpackHandler : ScreenHandler
     {
         var item = $"{(inPack ? Pack : Equipped)}.getitem({column},{row})";
         var card = CardText.Full(ctx, item + ".equipment", withSize: true);
+        var holding = _held.Length > 0 ? ctx.Translate(_held) : "";
         var content = card.Length > 0
-            ? (_held.Length > 0 ? card + ". " + Strings.T("pack.swap_hint") : card)
-            : Strings.T(_held.Length > 0 ? "pack.empty_drop" : "pack.empty");
+            ? (holding.Length > 0 ? card + ". " + Strings.T("pack.swap_hint", holding) : card)
+            : holding.Length > 0 ? Strings.T("pack.empty_drop", holding) : Strings.T("pack.empty");
         var place = sayArea ? Where(inPack, column, row) : Strings.T("pack.cell_short", column + 1, row + 1);
         return sayArea ? place + ". " + content : content + ". " + place;
     }

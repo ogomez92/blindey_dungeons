@@ -77,11 +77,11 @@ public sealed partial class LevelUpHandler : CardScreenHandler
 
     public override void OnPoll(ScreenContext ctx)
     {
-        base.OnPoll(ctx);
-
         var v = ctx.Bridge.Batch(Screen + ".state", Screen + ".leveledup", Screen + ".giveexp",
                                  Screen + ".lastbattleexpreward", Screen + ".lastbattlegoldreward", Screen + ".nextlevelexp");
         var state = v[0].AsString();
+        _state = state;   // before the base poll: ShouldSpeak and DescribeFocus go by it
+        base.OnPoll(ctx);
 
         // The stars are handed over one by one; what is still needed is only right once they all are.
         if (state == "gainxp" && !_rewardsSaid && v[2].AsInt() == 0 && v[3].Exists)
@@ -92,17 +92,23 @@ public sealed partial class LevelUpHandler : CardScreenHandler
         }
 
         if (v[1].AsBool() && !_leveled) { _leveled = true; ctx.SayEvent(Strings.T("levelup.leveled")); }
-        _state = state;
     }
 
     /// <summary>A reward that is not a card: the caption drawn in the focused button's column.</summary>
-    private static string ColumnCaption(ScreenContext ctx, NavButton focus)
+    private static string ColumnCaption(ScreenContext ctx, NavButton focus, double halfWidth = 450, int top = 400)
     {
         var labels = new HashSet<string>(ctx.State.Buttons.Select(b => StageCleaner.Key(b.Label)));
-        var lines = ctx.Stage.Current.Where(p => p.Y > 400 && p.Y < focus.Y - 20 && Math.Abs(p.X - focus.X) < 450 && !labels.Contains(p.Key))
+        var lines = ctx.Stage.Current.Where(p => p.Y > top && p.Y < focus.Y - 20 && Math.Abs(p.X - focus.X) < halfWidth && !labels.Contains(p.Key))
                        .Select(p => p.Text);
-        return string.Join(". ", lines);
+        return TextCleanup.JoinLines(lines);
     }
+
+    /// <summary>
+    /// "You get an extra dice!" with its lone Take button: the words are the reward and the
+    /// button is what Enter does, so they are one announcement, in that order. Read as loose
+    /// text plus a focus echo, the echo jumped the speech queue ("You get. Take. An extra dice!").
+    /// </summary>
+    private bool RequiredReward => _state == "chooserequiredrewards";
 
     /// <summary>What the gadget named on the focused button does: the lines drawn under that button.</summary>
     private static string BelowButton(ScreenContext ctx, NavButton focus)
@@ -132,6 +138,8 @@ public sealed partial class LevelUpHandler : CardScreenHandler
             return TextCleanup.JoinSentences(CardText.Name(ctx, Cards[joined].Expression), welcome.Label);
 
         var focus = ctx.State.Focus;
+        if (focus != null && RequiredReward && ctx.State.Buttons.Count == 1)
+            return TextCleanup.JoinSentences(ColumnCaption(ctx, focus, halfWidth: 1200, top: 150), PressEnterTo(focus.Label));
         if (focus == null || Cards.Count == 0 || FocusedCard(ctx) >= 0) return base.DescribeFocus(ctx);
         return TextCleanup.JoinSentences(ColumnCaption(ctx, focus), base.DescribeFocus(ctx));
     }
@@ -139,6 +147,7 @@ public sealed partial class LevelUpHandler : CardScreenHandler
     protected override bool ShouldSpeak(ScreenContext ctx, Paragraph p)
         => base.ShouldSpeak(ctx, p) && !Multiplier().IsMatch(p.Text) && p.Y < 2100   // below: the map's status strip
            && !(_state == "inventorgadgets" && p.Y > 1400)                              // gadget captions: read with their button
+           && !(RequiredReward && p.Y > 150 && p.Y < 1700)                                 // the reward's words: read with Take (the button registers a poll after them)
            && !p.Text.TrimEnd().EndsWith(':');                                          // "Next level:" labels a row of stars
 
     public override string DescribeContext(ScreenContext ctx)

@@ -82,6 +82,9 @@ public sealed partial class CombatHandler : ScreenHandler
         _choicesSaid = "";
         _dialog = null;
         _paused = false;
+        _pauseLabels.Clear();
+        _pauseClosedAt = DateTime.MinValue;
+        _enemyCard = -1;
         _phase = "";
         _spokenThisBattle.Clear();
         _narrator.Reset();
@@ -92,13 +95,20 @@ public sealed partial class CombatHandler : ScreenHandler
     public override void OnPoll(ScreenContext ctx)
     {
         _cardRects = ReadCardRects(ctx);
-        _paused = PauseMenuOpen(ctx);
+        var paused = PauseMenuOpen(ctx);
+        if (_paused && !paused) _pauseClosedAt = DateTime.UtcNow;
+        _paused = paused;
         base.OnPoll(ctx);
         _narrator.Poll(ctx);
 
         // The pause menu (F11) is a screen of its own laid over the battle. The card cursor is
         // frozen beneath it, and must stay silent while the player moves through the options.
-        if (_paused) { _focusKey = ""; return; }
+        if (_paused)
+        {
+            foreach (var b in ctx.State.Buttons) _pauseLabels.Add(b.RawLabel);
+            _focusKey = "";
+            return;
+        }
 
         AnnounceEnemyPreview(ctx);
         AnnounceChoices(ctx);
@@ -194,7 +204,31 @@ public sealed partial class CombatHandler : ScreenHandler
         if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right or NavKey.Confirm or NavKey.Back) { _navKeyAt = DateTime.UtcNow; _navKey = key; }
         if (key == NavKey.X && ctx.State.Focus == null && !_limitPrompt && !_fleePrompt) _quietUntil = DateTime.UtcNow.AddSeconds(2.5);
         if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right && MoveCardCursor(ctx, key is NavKey.Left or NavKey.Up ? -1 : 1)) return true;
+        if (key is NavKey.EnemyNext or NavKey.EnemyPrevious) { BrowseEnemyCards(ctx, key == NavKey.EnemyNext ? 1 : -1); return true; }
         return base.OnKey(ctx, key);
+    }
+
+    private int _enemyCard = -1;
+
+    /// <summary>
+    /// Tab: the enemy's cards one at a time, with their place in the list; Shift+Tab goes back.
+    /// Read from the card objects, never from the stage: off the preview the enemy's cards
+    /// are parked over the player's, and the text inside their rectangles is the player's.
+    /// </summary>
+    private void BrowseEnemyCards(ScreenContext ctx, int step)
+    {
+        var rows = ctx.Bridge.Pluck("{Game}.monster.equipment", "name", "ready", "availablethisturn", "remainingcountdown", "countdown", "namemodifier") ?? new();
+        var cards = rows.Select((r, i) => (Row: r, Index: i)).Where(c => c.Row[0].Exists).ToList();
+        if (cards.Count == 0) { ctx.Say(Strings.T("cards.enemy_none"), interrupt: true); return; }
+        _enemyCard = _enemyCard < 0 ? (step > 0 ? 0 : cards.Count - 1) : (_enemyCard + step + cards.Count) % cards.Count;
+        var (row, index) = cards[_enemyCard];
+        var card = $"{{Game}}.monster.equipment[{index}]";
+        var parts = new List<string> { CardText.Full(ctx, card) };
+        if (row[4].AsInt() > 0) parts.Add(row[3].AsInt() > 0 ? Strings.T("slot.COUNTDOWN", row[3].AsInt()) : Strings.T("card.ready"));
+        if (!row[1].AsBool(true) || !row[2].AsBool(true)) parts.Add(Strings.T("card.unavailable"));
+        var text = TextCleanup.JoinSentences(parts.ToArray()) + ", " + Strings.T("of", _enemyCard + 1, cards.Count);
+        ctx.Say(_enemyCard == 0 && step > 0 ? Strings.T("cards.enemy_one", text) : text, interrupt: true);
+        ctx.FocusItem(parts);
     }
 
     /// <summary>
@@ -244,11 +278,17 @@ public sealed partial class CombatHandler : ScreenHandler
         var sameColumn = Math.Abs(from.X - target.X) < 1;
         var button = sameColumn ? (target.Y > from.Y ? PadButton.Down : PadButton.Up) : (target.X > from.X ? PadButton.Right : PadButton.Left);
         if (!ctx.State.GamepadMode) ctx.Bridge.Eval("{ControlMode}.notifyGamepadInput()");
-        if (!sameColumn) ctx.Bridge.SetField(Combat, "gamepad_preferredrow", target.Row.ToString());
-        _wanted = new WantedCard(target.Index, target.Name, target.X, target.Y, DateTime.UtcNow);
-        _pad.Down(button);
-        _ = Task.Run(async () => { await Task.Delay(60); _pad.Up(button); });
+        _wanted = new WantedCard(target.Index, target.Name, target.X, target.Y, DateTime.UtcNow, button, sameColumn ? -1 : target.Row);
+        Press(ctx, _wanted);
         return true;   // the poll speaks the new card: its key changed and an arrow was just pressed
+    }
+
+    /// <summary>One press of the d-pad button that leads to the wanted card, with the row hint the game picks stacked cards by.</summary>
+    private void Press(ScreenContext ctx, WantedCard want)
+    {
+        if (want.PreferredRow >= 0) ctx.Bridge.SetField(Combat, "gamepad_preferredrow", want.PreferredRow.ToString());
+        _pad.Down(want.Button);
+        _ = Task.Run(async () => { await Task.Delay(60); _pad.Up(want.Button); });
     }
 
     private sealed record ListCard(int Index, string Name, double X, double Y, int Row, string Skill);
@@ -287,25 +327,35 @@ public sealed partial class CombatHandler : ScreenHandler
     /// <summary>"2 of 5": tells two copies of a card apart and says when the list has ended.</summary>
     private static string ListPosition(int count, int at) => at >= 0 && count > 1 ? Strings.T("of", at + 1, count) : "";
 
-    private sealed record WantedCard(int Index, string Name, double X, double Y, DateTime At);
+    private sealed record WantedCard(int Index, string Name, double X, double Y, DateTime At, PadButton Button, int PreferredRow, int Attempt = 1);
 
     private WantedCard? _wanted;
 
     /// <summary>
     /// After a list move: true while the game's cursor has not reached the card the player
-    /// asked for. A card the game will not give the cursor to (seen: Reunion's Warrior panel
-    /// while he still has a card to play - the game even undoes a direct write of the cursor
-    /// every frame, which is why there is no such write here) leaves the list for the rest of
-    /// the turn, and the player hears where the cursor still is instead of silence.
+    /// asked for. A press the game let pass (it happens in the moment after a card is played,
+    /// while the used card slides away: Combat Roll was lost from the list that way in the
+    /// second play-test) is made once more. A card the game will not give the cursor to even
+    /// then (seen: Reunion's Warrior panel while he still has a card to play - the game even
+    /// undoes a direct write of the cursor every frame, which is why there is no such write
+    /// here) leaves the list for the rest of the turn, and the player hears where the cursor
+    /// still is instead of silence.
     /// </summary>
     private bool AwaitingListMove(ScreenContext ctx, GameValue name, GameValue tx, GameValue ty)
     {
         if (_wanted is not { } want) return false;
         if (name.AsString() == want.Name && Math.Abs(tx.AsDouble() - want.X) < 1 && Math.Abs(ty.AsDouble() - want.Y) < 1) { _wanted = null; return false; }
-        if (DateTime.UtcNow - want.At < TimeSpan.FromMilliseconds(250)) return true;
+        if (DateTime.UtcNow - want.At < TimeSpan.FromMilliseconds(want.Attempt == 1 ? 300 : 400)) return true;
+        if (want.Attempt == 1)
+        {
+            ctx.Log($"Card list: the cursor is still on {name.AsString()}, not {want.Name}; pressing again.");
+            _wanted = want with { At = DateTime.UtcNow, Attempt = 2 };
+            Press(ctx, _wanted);
+            return true;
+        }
         _wanted = null;
         _refused.Add(want.Index);
-        ctx.Log($"Card list: the game kept the cursor on {name.AsString()} and off {want.Name}; left out of the list this turn.");
+        ctx.Log($"Card list: the game kept the cursor on {name.AsString()} and off {want.Name} twice; left out of the list this turn.");
         var (cards, at) = ListCards(ctx);
         var here = TextCleanup.Join(DescribeFocusBrief(ctx).TrimEnd('.', ' '), ListPosition(cards.Count, at));
         if (here.Length > 0) ctx.Say(here, interrupt: true);
@@ -380,12 +430,18 @@ public sealed partial class CombatHandler : ScreenHandler
     private static bool PauseMenuOpen(ScreenContext ctx) => ctx.Bridge.Eval("{states.Settings}.screens.length").AsInt() > 0;
 
     private string _choicesSaid = "";
+    private readonly HashSet<string> _pauseLabels = new();
+    private DateTime _pauseClosedAt = DateTime.MinValue;
 
-    /// <summary>A set of buttons appearing mid-battle is a choice the player has to notice: the Robot's jackpot.</summary>
+    /// <summary>
+    /// A set of buttons appearing mid-battle is a choice the player has to notice: the Robot's
+    /// jackpot. Not the pause menu's own buttons, which the game keeps registered for a
+    /// moment after Continue closes it (heard as "Choose a prize: Continue, Options...").
+    /// </summary>
     private void AnnounceChoices(ScreenContext ctx)
     {
-        if (PauseMenuOpen(ctx)) return;
-        var choices = ctx.State.Buttons.Where(b => b.RawLabel != "Calculate").GroupBy(b => b.RawLabel).Select(g => g.First()).ToList();
+        if (PauseMenuOpen(ctx) || DateTime.UtcNow - _pauseClosedAt < TimeSpan.FromSeconds(1.5)) return;
+        var choices = ctx.State.Buttons.Where(b => b.RawLabel != "Calculate" && !_pauseLabels.Contains(b.RawLabel)).GroupBy(b => b.RawLabel).Select(g => g.First()).ToList();
         var key = string.Join("|", choices.Select(b => b.RawLabel));
         if (key == _choicesSaid) return;
         _choicesSaid = key;

@@ -152,10 +152,44 @@ public static partial class TextCleanup
         return s;
     }
 
-    /// <summary>Joins parts, dropping empties, for "Name, 3 of 5" style readouts.</summary>
-    /// <summary>Joins whole sentences: "A. B. C", whatever punctuation the parts came with.</summary>
+    /// <summary>Joins whole sentences: "A. B. C", whatever punctuation the parts came with ("A! B" stays "A! B").</summary>
     public static string JoinSentences(params string?[] parts)
-        => string.Join(". ", parts.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p!.Trim().TrimEnd('.')));
+    {
+        var sb = new StringBuilder();
+        foreach (var raw in parts)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var part = raw.Trim().TrimEnd('.');
+            if (sb.Length > 0) sb.Append("!?".Contains(sb[^1]) ? " " : ". ");
+            sb.Append(part);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Lines drawn one under the other as the game splits them: a line that ends without
+    /// punctuation and goes on in the same voice ("YOU GET" / "AN EXTRA DICE!") is one
+    /// sentence; anything else is a sentence of its own.
+    /// </summary>
+    public static string JoinLines(IEnumerable<string> lines)
+    {
+        var sb = new StringBuilder();
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            if (sb.Length > 0)
+            {
+                var last = sb[^1];
+                var ended = ".!?:;".Contains(last);
+                var continues = !ended
+                                && (char.IsLower(line[0]) || line.Where(char.IsLetter).All(char.IsUpper) && sb.ToString().Where(char.IsLetter).All(char.IsUpper));
+                sb.Append(continues || ended ? " " : ". ");
+            }
+            sb.Append(line);
+        }
+        return sb.ToString();
+    }
 
     public static string Join(params string?[] parts)
     {

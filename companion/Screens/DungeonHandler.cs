@@ -88,12 +88,17 @@ public sealed class DungeonHandler : ScreenHandler
         {
             _stepFrom = "";
             _walkTo = "";
+            // The enemy on this space is what Enter must act on now, so the cursor comes back
+            // here: left on the far destination of the walk, Enter only said "that is 4 steps
+            // away" and the promised fight never started.
+            if (here.Type == "ENEMY") { _cursorId = here.Id; _blockedOn = here.Id; }
             ctx.Say(here.Type == "ENEMY" ? Strings.T("map.blocked_enemy", ctx.Translate(here.Enemy)) : Strings.T("map.blocked"), interrupt: true);
         }
 
         if (here.Id != _lastPosition)
         {
             _stepFrom = "";
+            _blockedOn = "";
             _arrivedAt = DateTime.UtcNow;
             var first = _lastPosition.Length == 0;
             _lastPosition = here.Id;
@@ -117,6 +122,7 @@ public sealed class DungeonHandler : ScreenHandler
     }
 
     private string _walkTo = "";
+    private string _blockedOn = "";   // the enemy space the game refused to walk on from
     private DateTime _arrivedAt = DateTime.MinValue;
 
     /// <summary>
@@ -253,7 +259,8 @@ public sealed class DungeonHandler : ScreenHandler
     {
         var map = ReadFloor(ctx, out var here);
         if (here == null) return;
-        var targets = Targets(map, here);
+        // Points of interest only: an empty space next door is an exit, not a point of interest.
+        var targets = Targets(map, here).Where(t => t.Node.Type != "EMPTY").ToList();
         if (targets.Count == 0) { ctx.Say(Strings.T("map.no_exits"), interrupt: true); return; }
 
         var index = targets.FindIndex(t => t.Node.Id == _cursorId);
@@ -286,6 +293,8 @@ public sealed class DungeonHandler : ScreenHandler
         if (here == null) return false;
         var target = CursorNode(map, here);
         if (target.Id == here.Id) return false;
+        // Standing on an enemy that blocks the way: Enter is the fight, wherever the cursor is.
+        if (here.Type == "ENEMY" && _blockedOn == here.Id) { _cursorId = here.Id; return false; }
 
         if (!here.Links.Contains(target.Id))
         {

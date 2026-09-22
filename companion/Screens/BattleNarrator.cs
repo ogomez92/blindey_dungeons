@@ -66,7 +66,11 @@ public sealed class BattleNarrator
         _enemyDice = new(); _pendingEnemyDice = new();
         _details.Clear();
         _recentStatuses.Clear();
+        _explained.Clear();
     }
+
+    /// <summary>Statuses whose rules text has been said this battle: "Frozen" needs explaining once, not every turn.</summary>
+    private readonly HashSet<string> _explained = new();
 
     public void Poll(ScreenContext ctx)
     {
@@ -188,7 +192,7 @@ public sealed class BattleNarrator
         if (ctx.Config.AnnounceEnemyEquipment && enemy.Cards.Count > 0)
             ctx.SayEvent(Strings.T("battle.enemy_cards", enemy.Name, string.Join(", ", enemy.Cards.Select(c => c.Name))));
         foreach (var (f, who) in new[] { (player, Strings.T("battle.you")), (enemy, enemy.Name) })
-            if (f.Statuses.Count > 0) ctx.SayEvent(who + ": " + string.Join(", ", f.Statuses.Select(Describe)));
+            if (f.Statuses.Count > 0) ctx.SayEvent(who + " " + string.Join(", ", f.Statuses.Select(Describe)));
     }
 
     private void AnnounceTurn(ScreenContext ctx, string phase, string turn, FighterState player, FighterState enemy)
@@ -254,7 +258,7 @@ public sealed class BattleNarrator
             ctx.SayEvent(free.Count == 0 ? Strings.T("dice.none") : Strings.T("dice.list", string.Join(", ", free)));
     }
 
-    private static void Diff(ScreenContext ctx, FighterState before, FighterState after, bool isPlayer)
+    private void Diff(ScreenContext ctx, FighterState before, FighterState after, bool isPlayer)
     {
         var who = isPlayer ? Strings.T("battle.you") : after.Name;
 
@@ -286,7 +290,15 @@ public sealed class BattleNarrator
             var now = after.Statuses.GroupBy(s => s.Name).ToDictionary(g => g.Key, g => g.Sum(s => s.Value));
             foreach (var (name, value) in now)
             {
-                if (!old.TryGetValue(name, out var was)) ctx.SayEvent(Strings.T("battle.status_gain", who, Describe(new StatusInfo(name, value))));
+                if (!old.TryGetValue(name, out var was))
+                {
+                    // "You frozen" says nothing to someone who cannot see the icon's tooltip:
+                    // the status's own rules text follows, the first time it appears in a battle.
+                    var text = Strings.T("battle.status_gain", who, Describe(new StatusInfo(name, value)));
+                    var rules = after.Statuses.FirstOrDefault(s => s.Name == name)?.Description ?? "";
+                    if (rules.Length > 0 && _explained.Add(name)) text = TextCleanup.JoinSentences(text, rules);
+                    ctx.SayEvent(text);
+                }
                 else if (was != value) ctx.SayEvent(Strings.T("battle.status_now", who, name, value));
             }
             foreach (var name in old.Keys.Where(n => !now.ContainsKey(n))) ctx.SayEvent(Strings.T("battle.status_lost", who, name));

@@ -15,7 +15,10 @@ namespace DiceyA11y.Screens;
 /// </summary>
 public sealed class ScreenMonitor : IDisposable
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(35);
+    // The poll itself costs a game frame; the pause between polls is what a key press waits
+    // for on top of that, so it is short, and a key press cuts it short altogether (_wake).
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(20);
+    private readonly AutoResetEvent _wake = new(false);
 
     private const string Nav = "{ButtonGamepadNavigation}";
     private const string CurrentScene = "{haxegon.Scene}.scenelist[{haxegon.Scene}.currentscene]";
@@ -105,7 +108,7 @@ public sealed class ScreenMonitor : IDisposable
             {
                 _log("Screen monitor error: " + ex);
             }
-            Thread.Sleep(PollInterval);
+            _wake.WaitOne(PollInterval);
         }
     }
 
@@ -276,8 +279,15 @@ public sealed class ScreenMonitor : IDisposable
         {
             // Space is Enter's twin everywhere but the map, where it recentres the map cursor.
             if (key == NavKey.Snap && _active is not DungeonHandler) key = NavKey.Confirm;
-            try { using (_bridge.OpenScope()) return _active.OnKey(_ctx, key); }
+            try
+            {
+                // A learning scope, like the poll's: the reads the last key press on this screen
+                // made are sent together first, so the handler's own reads (the card list, the
+                // floor) cost one frame instead of one each.
+                using (_bridge.OpenScope("key:" + _ctx.State.Scene)) return _active.OnKey(_ctx, key);
+            }
             catch (Exception ex) { _log("Key handling failed: " + ex.Message); return false; }
+            finally { _wake.Set(); }   // poll at once: what the key changed is spoken from the poll
         }
     }
 

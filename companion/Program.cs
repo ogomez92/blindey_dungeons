@@ -210,7 +210,33 @@ public static class Program
             ("",                                 ""),
         };
 
+        (string Input, string Expected)[] hints =
+        {
+            ("Desde aquí puedes reorganizar tu equipo.", "Desde aquí puedes reorganizar tu equipo. Press R to open the inventory."),
+            ("If you want, you can see what the enemy's moves are here.", "If you want, you can see what the enemy's moves are here. Press Tab to hear them."),
+            ("It's another enemy!", "It's another enemy!"),
+        };
+        (string[] Lines, string Expected)[] joins =
+        {
+            (new[] { "¡RECIBES", "UN DADO EXTRA!" }, "¡RECIBES UN DADO EXTRA!"),
+            (new[] { "Choose a reward!", "Sword" }, "Choose a reward! Sword"),
+            (new[] { "A line", "continues here" }, "A line continues here"),
+        };
+        Console.WriteLine(TextCleanup.JoinSentences("An extra dice!", "Press Enter to take") == "An extra dice! Press Enter to take" ? "ok    JoinSentences after !" : "FAIL  JoinSentences after !");
+
         var failures = 0;
+        foreach (var (input, expected) in hints)
+        {
+            var actual = TutorialHints.Apply(input);
+            if (actual != expected) { failures++; Console.WriteLine($"FAIL  hint \"{input}\" -> \"{actual}\""); }
+            else Console.WriteLine($"ok    hint \"{input}\"");
+        }
+        foreach (var (lines, expected) in joins)
+        {
+            var actual = TextCleanup.JoinLines(lines);
+            if (actual != expected) { failures++; Console.WriteLine($"FAIL  join -> \"{actual}\", expected \"{expected}\""); }
+            else Console.WriteLine($"ok    join \"{actual}\"");
+        }
         foreach (var (input, expected) in cases)
         {
             var actual = TextCleanup.Clean(input);
@@ -303,19 +329,16 @@ public static class Program
         Map(Keys.Period, PadButton.A, NavKey.NextItem);
         Map(Keys.Letter('P'), PadButton.A, NavKey.Path);
 
-        // In battle the game shows the enemy's cards while the right stick is held up
-        // (found by trying every button and axis: only axis 3 = -1 sets
-        // states.Combat.previewingequipment). Tab is that stick. A quick tap is stretched
-        // so the cards have time to slide in and be read.
-        var peekStarted = DateTime.MinValue;
-        _hotkeys.BindHeld(Keys.Tab,
-            () => { peekStarted = DateTime.UtcNow; _screens.NoteInput(); _pad.Axis(3, -1.0); },
-            () =>
-            {
-                var remaining = TimeSpan.FromMilliseconds(1600) - (DateTime.UtcNow - peekStarted);
-                if (remaining > TimeSpan.Zero) Thread.Sleep(remaining);
-                _pad.Axis(3, 0.0);
-            });
+        // Tab reads the enemy's cards one at a time (Shift+Tab backwards). It used to hold
+        // the right stick up, which shows them on screen: every card was read in one go and
+        // could not be browsed, and the release handler slept on the key queue, so the next
+        // arrow waited behind it.
+        Map(Keys.Tab, PadButton.A, NavKey.EnemyNext);
+        _hotkeys.BindHeld(Keys.Tab, () => NavDown(NavKey.EnemyPrevious), () => NavUp(NavKey.EnemyPrevious), shift: true);
+
+        // Left Control silences speech, as it does in the screen reader itself; the key still
+        // reaches the game and still works as the Control of the review shortcuts.
+        _hotkeys.BindObserved(Keys.LeftControl, () => _speech.StopSpeech());
     }
 
     private static readonly Dictionary<NavKey, PadButton> PadFor = new()
@@ -359,11 +382,12 @@ public static class Program
         }
         if (line == "peek")
         {
-            _pad.Axis(3, -1.0);
-            Thread.Sleep(1600);
-            _pad.Axis(3, 0.0);
+            NavDown(NavKey.EnemyNext);
+            Thread.Sleep(60);
+            NavUp(NavKey.EnemyNext);
             return "ok";
         }
+        if (line == "stop") { _speech.StopSpeech(); return "ok"; }
         if (parts.Length == 2 && parts[0] == "cursor")
             return parts[1] switch
             {

@@ -20,6 +20,8 @@ public class ScreenHandler
     private bool _entryRead;
     private DateTime _enteredAt;
     private string _announcedFocus = "";
+    private string _announcedLabel = "";
+    private double _announcedX, _announcedY;
     private string _heldFocus = "";
     private DateTime _heldFocusSince;
     private string _toggleSeen = "";
@@ -61,6 +63,7 @@ public class ScreenHandler
         _entryRead = false;
         _enteredAt = DateTime.UtcNow;
         _announcedFocus = "";
+        _announcedLabel = "";
         ctx.Stage.Reset();
         ctx.SayEvent(ScreenName(ctx));
     }
@@ -121,7 +124,7 @@ public class ScreenHandler
         // not leave the player without a focus announcement.
         if (!_entryRead && fresh == null && DateTime.UtcNow - _enteredAt < TimeSpan.FromSeconds(1.2)) return;
 
-        if (fresh != null) SpeakParagraphs(ctx, fresh);
+        var spokeText = fresh != null && SpeakParagraphs(ctx, fresh);
         if (!_entryRead) { _entryRead = true; OnEntryRead(ctx); }
 
         if (ctx.State.FocusKey != _announcedFocus)
@@ -134,14 +137,24 @@ public class ScreenHandler
                 if (_heldFocus != ctx.State.FocusKey) { _heldFocus = ctx.State.FocusKey; _heldFocusSince = DateTime.UtcNow; }
                 if (DateTime.UtcNow - _heldFocusSince < TimeSpan.FromMilliseconds(900)) return;
             }
+            if (SameButtonMoving(ctx)) return;
             _heldFocus = "";
             _announcedFocus = ctx.State.FocusKey;
             _toggleSeen = ReadToggle(ctx);
             _sliderValue = SliderValue(ctx);
-            if (ctx.State.Focus != null)
+            if (ctx.State.Focus is { } focus)
             {
+                var moved = focus.RawLabel == _announcedLabel && !ButtonAt(ctx, _announcedLabel, _announcedX, _announcedY, except: focus);
+                _announcedLabel = focus.RawLabel;
+                _announcedX = focus.X;
+                _announcedY = focus.Y;
+                // The same button come to rest somewhere else (a popup that slid away with its
+                // OK still focused) is not news; a twin of it is ("Buy, 2 of 3").
+                if (moved) return;
                 var text = DescribeFocus(ctx);
-                ctx.Say(text, interrupt: RecentInput(ctx));
+                // Text that was just announced comes first; the button belongs after it, so it
+                // must not jump the queue the way an answer to a key press does.
+                if (spokeText && !RecentInput(ctx)) ctx.SayAfterEvents(text); else ctx.Say(text, interrupt: RecentInput(ctx));
                 ctx.FocusItem(FocusLines(ctx, text));
             }
         }
@@ -162,16 +175,39 @@ public class ScreenHandler
     /// <summary>Once per visit, after the opening text and before the first focus echo.</summary>
     protected virtual void OnEntryRead(ScreenContext ctx) { }
 
-    protected void SpeakParagraphs(ScreenContext ctx, List<Paragraph> paragraphs)
+    /// <summary>
+    /// A focused button with the same caption as the last one announced, at another place,
+    /// and still on the move between two polls: a popup sliding away with its OK, or the
+    /// game's button gliding into position. Announced once it rests (see OnPoll), never
+    /// per frame ("Ok, 1 of 2. Ok, 1 of 2. Ok" was heard after every fight).
+    /// </summary>
+    private bool SameButtonMoving(ScreenContext ctx)
+    {
+        var focus = ctx.State.Focus;
+        var before = ctx.Previous.Focus;
+        if (focus == null || before == null || focus.RawLabel != _announcedLabel || before.RawLabel != focus.RawLabel) return false;
+        return Math.Abs(before.X - focus.X) > 1 || Math.Abs(before.Y - focus.Y) > 1;
+    }
+
+    /// <summary>Whether a button with this caption still stands near (x, y), other than the one focused now.</summary>
+    private static bool ButtonAt(ScreenContext ctx, string label, double x, double y, NavButton except)
+        => ctx.State.Buttons.Any(b => b.RawLabel == label && Math.Abs(b.X - x) < 80 && Math.Abs(b.Y - y) < 80
+                                      && (Math.Abs(b.X - except.X) > 1 || Math.Abs(b.Y - except.Y) > 1));
+
+    /// <summary>True when at least one paragraph was spoken.</summary>
+    protected bool SpeakParagraphs(ScreenContext ctx, List<Paragraph> paragraphs)
     {
         var labels = new HashSet<string>(ctx.State.Buttons.Select(b => StageCleaner.Key(b.Label)));
+        var spoke = false;
         foreach (var p in paragraphs)
         {
             if (labels.Contains(p.Key)) continue;
             if (ctx.State.Focus?.RawLabel == SliderLabel && IsSliderValue(p.Text)) continue;   // said with the slider
             if (!ShouldSpeak(ctx, p)) continue;
-            ctx.SayEvent(p.Text);
+            ctx.SayEvent(TutorialHints.Apply(p.Text));
+            spoke = true;
         }
+        return spoke;
     }
 
     /// <summary>A focus change the player caused may cut off the previous focus echo.</summary>
@@ -245,9 +281,23 @@ public class ScreenHandler
         var index = buttons.ToList().FindIndex(b => b.RawLabel == focus.RawLabel && Math.Abs(b.X - focus.X) < 1 && Math.Abs(b.Y - focus.Y) < 1);
         var label = index >= 0 && buttons.Count > 1
             ? focus.Label + ", " + Strings.T("of", index + 1, buttons.Count)
-            : focus.Label;
+            : PressEnterTo(focus.Label);
         var column = ReadColumnAboveTwins ? ColumnAbove(ctx, focus) : "";
         return column.Length > 0 ? column + ". " + label : label;
+    }
+
+    /// <summary>
+    /// The only button on a screen is what Enter does there ("Take", "Continue", "Open"):
+    /// said as the action it is, so the player knows the key as well as the word.
+    /// </summary>
+    protected static string PressEnterTo(string label)
+    {
+        var word = label.Trim();
+        if (word.Length == 0) return label;
+        // "OK" is not a verb: "OK, press Enter" rather than "press Enter to ok".
+        return word.Length <= 3 || !word.Any(char.IsLetter)
+            ? Strings.T("focus.press_enter_short", word)
+            : Strings.T("focus.press_enter", word.ToLowerInvariant());
     }
 
     /// <summary>Screens that describe what stands over their buttons themselves turn this off.</summary>
