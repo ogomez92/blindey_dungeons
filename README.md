@@ -35,10 +35,24 @@ It has not yet been tested by a blind player — reports are very welcome.
    It finds the game through Steam (there is a Browse button if it cannot), downloads the
    mod and installs it. The installer works with a screen reader; `--cli` gives a terminal
    version.
-3. Start the game with **`DiceyA11y\DiceyA11y.exe` inside the game folder**, not from Steam's
-   Play button. A desktop shortcut to it helps. It starts Dicey Dungeons for you, says
-   "Dicey Dungeons accessibility ready", and closes when the game does. If the game is
-   already running (started from Steam, say) it attaches to it instead.
+3. **Make Steam start the mod.** Out of the box, Steam's Play button starts the game
+   *without* the mod: nothing speaks. Fix that once: in your Steam library open the
+   **Properties** of Dicey Dungeons (Applications key or Shift+F10 on the game) and, on the
+   General tab, put this in the **Launch Options** box, quotes and `%command%` included:
+
+   ```
+   "C:\Program Files (x86)\Steam\steamapps\common\Dicey Dungeons\DiceyA11y\DiceyA11y.exe" %command%
+   ```
+
+   Change the first part if your game is installed somewhere else; the installer's last
+   message shows the line with your own path. Without `%command%` at the end Steam still
+   starts the game on its own, with no mod.
+4. Press Play. The launcher starts Dicey Dungeons for you, says "Dicey Dungeons
+   accessibility ready", and closes when the game does.
+
+Without Steam's help you can also start **`DiceyA11y\DiceyA11y.exe` inside the game folder**
+yourself (a desktop shortcut to it helps). If the game is already running it attaches to it
+instead.
 
 What gets installed: one folder, `DiceyA11y`, inside the game folder, and the game's
 `lime.ndll` is replaced by the mod's bridge, with the original kept next to it as
@@ -58,6 +72,7 @@ deletes the `DiceyA11y` folder.
 Download `DiceyA11y-v….zip` from the release, extract it **into the game folder** (so that
 the `DiceyA11y` folder ends up next to `diceydungeons.exe`), and start
 `DiceyA11y\DiceyA11y.exe`: on its first start the launcher installs the bridge itself.
+Set the Steam launch options of step 3 above if you want to start it from Steam.
 To remove it by hand, run `DiceyA11y\tools\install_bridge.ps1 -Uninstall` in PowerShell (or
 verify the game files in Steam) and delete the `DiceyA11y` folder.
 
@@ -141,10 +156,14 @@ work differently:
 
 | Key | Does |
 |---|---|
-| **Left / Right** | Choose where to go: first the exits from your space, then everything of interest on the floor (enemies, chests, shops, the way down) with its distance and first step |
-| **Up** | Walk one step toward it. Keep pressing to follow the route |
-| **Down** | Where am I, what is around, what else is on this floor |
-| **Enter** | Use the space you are on: open the chest, start the fight, enter the shop, go down |
+| **Arrow keys** | Move a cursor along the paths, from space to space, to explore the map. This never moves you. Paths run up right, down right, down left, up left and sometimes straight up or down. An arrow follows the path on that side; when two paths lead that way both are named and one of the other arrows picks, so "up right" is Up and Right in either order. Each space says what it is and how far from you it is |
+| **Comma / Period** | Jump the cursor to the previous / next point of interest: the exits from your space first, then enemies, chests, shops, the way down |
+| **Space** | Bring the cursor back to the space you are on |
+| **P** | Walk to the space under the cursor. The way is said first; any key stops the walk, and so does an enemy standing in the way |
+| **Enter** | On a space one step away: walk there. On your own space: use it (open the chest, start the fight, enter the shop, go down). Further away nothing happens, and you are told how far it is |
+
+Your health, gold, level, dice and cards are in the **Player** list (Ctrl+Left / Right), and
+**Ctrl+H** reads your health from anywhere.
 
 Walking is always safe: nothing happens on a space until you press Enter there. An enemy
 blocks the way past it until you fight it, and the mod tells you so.
@@ -162,10 +181,12 @@ blocks the way past it until you fight it, and the mod tells you so.
 | **F8** | Status effects on both sides |
 | **F9** | Events, newest first |
 | **Ctrl + Up / Down** | Step through the current list |
-| **Ctrl + Left / Right** | Switch list |
+| **Ctrl + Left / Right** | Switch list. The first list, *Focused item*, always follows what you are on (a card, a dice, a button, a map space) and becomes the current list whenever focus moves; tooltips, what hovering the mouse would show, sit at its top. Help is only a list between pressing F1 and moving away from it |
 | **Ctrl + Page Down / Page Up** | Screen cursor: step through every piece of text on screen |
 | **Ctrl + Enter** | Click what the screen cursor is on (for anything only a mouse could reach) |
-| **F10** | Stop speaking |
+| **Ctrl + D** | In battle: your dice that are still free |
+| **Ctrl + H** | Your health, current and maximum |
+| **Ctrl + E** | In battle: the enemy's health |
 | **F12** | Where am I |
 
 Announcements are queued, never cut off. Your own key presses do interrupt: moving focus
@@ -196,7 +217,9 @@ Logs are written next to the exe and overwritten each launch:
 | `diceya11y-spoken.log` | Only what was said |
 | `<game folder>\diceya11y-bridge.log` | The in-game half: whether it loaded and hooked |
 
-- **Nothing is spoken at all** — look for `Speech backend:` in `diceya11y.log`.
+- **Nothing is spoken at all** — most likely the game was started from Steam without the
+  launch options of Install step 3, so the launcher never ran (there is then no fresh
+  `diceya11y.log` either). Otherwise look for `Speech backend:` in `diceya11y.log`.
 - **Only "ready" is spoken, then silence** — the bridge is not installed (Steam restored
   the file while the game was running, say). Close the game and start `DiceyA11y.exe`
   again, or run the installer again. The log says `Waiting for the bridge pipe`.

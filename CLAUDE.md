@@ -136,7 +136,10 @@ Left13 Right14. Axes: 0/1 left stick, 2/3 right stick.
 Keys are held and released on the pad as pressed, so the game's own hold-to-repeat
 applies. The keyboard hook swallows them, so nothing acts twice. Default map: arrows =
 d-pad, Enter/Space = A, Escape = B, E = X, R = Y, Q/W = shoulders, F11 = Start,
-Backspace = Back, Tab = right stick up (enemy card preview in battle).
+Backspace = Back, Tab = right stick up (enemy card preview in battle). Space is A everywhere but
+the map (there it recentres the map cursor); comma, period and P exist only for the map and
+never reach the pad. Ctrl+D / Ctrl+H / Ctrl+E read dice, health and enemy health. The title's own
+"(Esc) Options" hint is therefore wrong under the mod; `StageCleaner` rewrites it to F11.
 
 **Both stick axes must be set in the same frame** (one `batch`). With x set a frame
 before y the game reads a horizontal push and walks to the wrong map node (seen).
@@ -159,6 +162,32 @@ before y the game reads a horizontal push and walks to the wrong map node (seen)
   glyphs become the bound key, `[gold]12` becomes "12 gold", `[comma]`, language-name
   images, and stick wording rewritten to arrow keys per language.
 
+### The cost of reading, and the frame cache
+
+A request is answered on the game's next frame, so **sequential requests cost a frame
+each** (measured: 30 evals one after another 461 ms, the same 30 sent together 19 ms; the
+bridge serves up to 64 per tick). A battle poll makes ~27 requests, which used to mean a
+poll of 450 ms and over a second from an arrow key to speech. `BridgeClient.OpenScope`
+fixes that without touching the handlers: inside a scope every pure read is remembered,
+and the poll's scope first sends, all at once, the reads the previous poll made. Rules
+that follow from it:
+
+- A read is only replayed if it is pure: no `(` except the whitelisted getters in
+  `BridgeClient.PureCalls`, no handles except `#0`. Add a getter there before using it in
+  a poll. Any other request empties the cache (something is about to change).
+- A read that must be instant when the player presses a key has to be made on *every*
+  poll, not only when the cursor moves, or it will not be in the prefetch. That is why
+  `CombatHandler.OnPoll` describes the selected card each time and throws it away.
+- `tools/latency.py Right Left ...` measures key-to-speech; `tools/bridgeperf.py` the raw
+  round trip; the log says `Slow poll` with the reads that were not sent ahead.
+
+### Review lists (`BufferManager`)
+
+The first list, *item*, follows focus: `ctx.FocusItem(lines)` fills it and makes it the
+current list (silently), with the screen's tooltips on top. Then events, player (health,
+gold, level, statuses), your cards, enemy cards, dice (only dice still free: not assigned,
+not `consumed`), status effects. Help is hidden except between F1 and moving off it.
+
 ### Generic fallback (`ScreenHandler`)
 
 Every scene without a dedicated handler gets: its name, its text, the focused control;
@@ -177,20 +206,65 @@ screen today.
 Arriving on a node does nothing; A acts on it. **The d-pad cannot reach every neighbour**:
 neighbours are diagonal, "up" ties between up-left and up-right, and on a tie the game
 does not move. A 100 ms stick push at the exact angle moves one step to exactly that
-node. So the mod owns movement here: Left/Right choose a destination (exits, then points
-of interest with Dijkstra routes that avoid fights when possible), Up steps, Down
-re-reads, Enter = A. An enemy blocks onward movement until fought; a step that goes
-nowhere is announced. Chest contents (`GraphNode.item`) are deliberately never spoken:
+node. So the mod owns movement here, through a cursor of its own that never moves the
+player. Paths run in exactly six directions ((+-480, +-240) and (0, +-480); counted with
+`tools/mapoffsets.py`), so a node has at most one neighbour in each, and the arrows follow
+paths only: Up/Down take the straight path if there is one, otherwise any arrow takes the
+single path on its side, and with two paths on that side both are named and the other pair
+of arrows picks (`_fork`). Direction words go by the signs of the offset, not its angle, so
+"up right" is always Up and Right in either order. (A first version searched a cone for
+the nearest node; an exit spoken as "up right" lies 27 degrees above the horizontal and did
+not answer to Up, which the player rightly called unreliable.) Comma/period cycle the points
+of interest (exits, then the rest with Dijkstra routes that avoid fights), Space snaps the
+cursor back, P walks to the cursor one stick push per landed step (any key, a menu or a
+blocking enemy ends it), Enter walks when the cursor is one step away and is the game's A
+on the player's own node. An enemy blocks onward movement until fought; a step
+that goes nowhere is announced. (This replaced a Left/Right-destination, Up-to-step scheme
+after the first blind play-test.) Chest contents (`GraphNode.item`) are deliberately never spoken:
 they are not shown on screen.
 
 **Battle (`CombatHandler` + `BattleNarrator`)** — `states.Combat` statics:
 `gamepad_selectedequipment` (cursor on a card), `gamepad_dicemode`, `gamepad_hoverdice`,
 `state` (`playerturn:allocatedice`, `monsterturn:...`), `turn` (`player` / `monster`),
 `previewingequipment`. Flow: d-pad between cards → A → choose dice → A plays it; B backs
-out; X ends the turn; **right stick up (held) shows the enemy's cards**. Card name and
+out; X ends the turn; **right stick up (held) shows the enemy's cards**. **The mod owns the
+card cursor** (`CombatHandler.MoveCardCursor`, second play-test): the game stacks two small
+cards in one column (Matchstick over Bump) and only Down reaches the lower one, which a blind
+player finds by chance. In card mode the arrows never reach the pad as pressed; the cards are
+one list (`ListCards`: ready, shown, on screen, ordered by `tx` then `ty`), Left/Up = previous,
+Right/Down = next, no wrap, the ends repeat the card, and every card is spoken with its
+position ("2 of 5": tells twins apart, marks the end). The move is made by **the game's own
+d-pad**: one press of the button that leads to the wanted card (Up/Down inside a column;
+Left/Right across, after writing `gamepad_preferredrow` = the card's `displayrow`, which is
+what picks between two stacked cards - verified), so the game's click and highlight follow.
+A first version only wrote `gamepad_selectedequipment`: it worked but was silent, and the
+player missed the click at once. There is no such write any more: the game undoes it every
+frame for a card it refuses. `AwaitingListMove` gives the cursor 250 ms to arrive; if it does
+not, the card leaves the list for the turn (`_refused`), the log says `Card list: the game kept
+the cursor on ...`, and the player hears where the cursor still is. Keys stay with the game in
+dice mode, in `gamepad_buttonmode`, under prompts, with a textbox open, and when several
+buttons are up (jackpot prizes, the six request dice); a panel with ONE focused button (the
+Robot's Calculate focuses as soon as the cursor is on the panel) is just a list item, because
+the game's own arrows wrap from it to some other card. Verified per character with
+`tools/cardlist.py` (walks the list through the real key path; `tools/relaunch_installed.ps1`
+and `tools/reunion_fight.ps1` set the fights up): Warrior, Thief, Robot incl. jackpot, Inventor,
+Witch with all slots, Jester (in the list too: the game's own arrows wrap around her hand and
+Up/Down were dead; her deck panel is not in `Fighter.equipment` and the game skips it), Reunion
+Warrior / Thief / Witch. Not walked: Reunion Jester, Robot and Inventor, Halloween, the finale.
+Card name and
 text are read off the stage from inside the card's rectangle (localized, live values);
 dice slots are pictures and come from `Equipment.slots` (`elements.DiceSlotType`).
 Narration diffs `Game.player` / `Game.monster` each poll. A blind dice is never read out.
+Also narrated: what the enemy rolled (`monsterturn:*`, once its pool settles) and the dice
+each of its cards was played with; a status moving from the fighter onto cards as one event
+per card ("Sword shocked", "Sword weakened": cards are matched by name without the "-"
+modifier, so no lost/gained pair); a dice that fits no open slot of the chosen card is
+"not available for <card>" (`DiceFits`, the rules of `Game.slotcheckvalue`). After E the
+state stays `playerturn:allocatedice` for ~2 s while cards slide away: the cursor is kept
+quiet for that time. Dead arrow keys repeat the speech line on screen when a textbox is
+open (`Tutorial.textboxes[*].actualtextbox.dismissed`, `Art.textboxmap`: **HYPOTHESIS**,
+seen only empty) or before the dice are thrown. The pause menu over a battle silences the
+card cursor entirely (`_paused`).
 
 **After a battle (`LevelUpHandler`)** — rewards are drawn as star and coin pictures, so
 `LevelUpScreen.lastbattleexpreward`, `lastbattlegoldreward`, `nextlevelexp` are read (once
@@ -236,7 +310,10 @@ Other battle facts found later: the finale's switch-fighter card (`skillcard ==
 "switchfighter"`) opens a chooser whose "Choose" caption is registered as a button only for
 the focused fighter; a change of `Game.player.name` mid-battle (finale switch, Bear Potion)
 is announced as "You now fight as X". Reunion: skill panels (`*reunion` skillcards) are fired
-with Y; the Warrior's cards need a second A to fire once loaded (manual fire); workout cards
+with Y, and **the cursor does land on them** (an earlier note here said never): the Thief's shows
+`Fighter.stolencard`, an enemy card played like his own (`ShowsStolenCard`); the Witch's takes
+a dice ("requires 5"); the Warrior's refuses the cursor while he has a card to play and gets
+it from the game once he has none; the Warrior's cards need a second A to fire once loaded (manual fire); workout cards
 use slot type COMBINATION, whose dice come from `elements.Combination.getstring(card)`.
 Names tagged by level packs ("Bump@reunionspacemarine") are translated by the part before @.
 
@@ -247,7 +324,8 @@ several buttons with the same caption in a row each read the text in their colum
 `DeckHandler` also serves `ViewParty` and `ViewTraining`; `BlacksmithHandler` also serves
 `states.Copyshop`.
 
-Test shortcuts that froze the game (never the mod): `createladyluck()` in a normal episode,
+Test shortcuts that froze the game (never the mod): quickstart `enemy=Jester` (native
+"Cannot find fighter template" box; enemy names are template names such as Frog, Slime), `createladyluck()` in a normal episode,
 fleeing from a fight reached by teleport, calling `changescene()` or `Modmode.popupOkay`
 by hand, quickstart `character=Bear`. Any node type can be made with
 `floor[k].updatenodedata(node, {elements.GraphNodeData}.createcopyshop())` and friends; a
@@ -300,6 +378,9 @@ callable through reflection ("not a function") although their static *variables*
 ## 8. Testing without being able to see or hear it
 
 - `tools/dev_bridge.ps1` — stop game, rebuild bridge, install, relaunch.
+- `tools/deploy_companion.ps1` — publish the companion into the installed copy the player
+  starts (`<game>\DiceyA11y`); `-Bridge` also refreshes its `bridge\lime.ndll`, `-Run` starts
+  it. A fix built only in `companion\bin` does not reach the player: run this and check there.
 - `tools/bridge.py` — REPL-style client: `eval`, `dump`, `probe`, `tree`.
 - `tools/pad.py` — press virtual buttons, print scene / focus / buttons / stage text.
 - `DiceyA11y.exe --dev` + `tools/dev.py` — drives the companion's **real key path**
@@ -315,7 +396,12 @@ callable through reflection ("not a function") although their static *variables*
   restarts only the companion, which re-attaches. `tools/dev.py buffer your_cards` reads a
   review list. Screen-specific probes: `backpack.py`, `smith.py`, `spellbook.py`,
   `editor.py`, `axis.py`.
-- Do not take screenshots to check a screen: other windows cover the game.
+- To *see* a screen: `python tools/gameshot.py out.png` has the game save its own frame
+  (`Window.readPixels().encode()` through the bridge). Screen capture does not work: the
+  OpenGL surface comes out plain white in PrintWindow and in the user's screenshot tool, and
+  `tools/shot.ps1` (CopyFromScreen) needs the window uncovered and catches whatever covers it.
+- What the map looks like (seen 2026-09-21): spaces are flat oval pads joined by thin straight
+  lines on a cave floor; no grid, no tiles. Not squares, hexes or diamonds.
 - Quickstart args (from the exe): `character=<Name> enemy=<Name> episode=<n> modcheats`.
   `enemy=` starts a battle two seconds after launch.
 - Save data lives in `%APPDATA%\Terry Cavanagh Games\diceydungeons`. Back it up before

@@ -1,3 +1,5 @@
+using DiceyA11y.Core;
+
 namespace DiceyA11y.Game.Buffers;
 
 /// <summary>
@@ -17,6 +19,12 @@ public sealed class AnnouncementBuffer
     private int _cursor = -1;
 
     public string Name { get; }
+
+    /// <summary>What the player hears; <see cref="Name"/> stays the internal id.</summary>
+    public string Title => Strings.Has("buffer." + Name) ? Strings.T("buffer." + Name) : Name;
+
+    /// <summary>Left out of Ctrl+Left/Right until something shows it (help: only after F1).</summary>
+    public bool Hidden { get; set; }
 
     /// <summary>
     /// Rebuilds the contents from live state when the buffer is read. Returning
@@ -76,19 +84,19 @@ public sealed class AnnouncementBuffer
     {
         Refresh();
         if (FollowLatest) _cursor = -1;
-        return _lines.Count == 0 ? $"{Name}, empty" : $"{Name}, {_lines.Count} items";
+        return _lines.Count == 0 ? Strings.T("buffer.empty", Title) : Strings.T("buffer.count", Title, _lines.Count);
     }
 
     /// <summary>Older events / further detail lines.</summary>
     public string MoveDeeper()
     {
         Refresh();
-        if (_lines.Count == 0) return $"{Name} is empty";
+        if (_lines.Count == 0) return Strings.T("buffer.empty", Title);
 
         if (_cursor >= _lines.Count - 1)
         {
             _cursor = _lines.Count - 1;
-            return $"{_lines[_cursor]}. End";
+            return Position();
         }
         _cursor++;
         return Position();
@@ -98,12 +106,12 @@ public sealed class AnnouncementBuffer
     public string MoveTowardTop()
     {
         Refresh();
-        if (_lines.Count == 0) return $"{Name} is empty";
+        if (_lines.Count == 0) return Strings.T("buffer.empty", Title);
 
         if (_cursor <= 0)
         {
             _cursor = 0;
-            return $"{_lines[_cursor]}. Top";
+            return Position();
         }
         _cursor--;
         return Position();
@@ -112,7 +120,7 @@ public sealed class AnnouncementBuffer
     public string Current()
     {
         Refresh();
-        if (_lines.Count == 0) return $"{Name} is empty";
+        if (_lines.Count == 0) return Strings.T("buffer.empty", Title);
         if (_cursor < 0) _cursor = 0;
         return Position();
     }
@@ -121,7 +129,7 @@ public sealed class AnnouncementBuffer
     public string ReadAll()
     {
         Refresh();
-        return _lines.Count == 0 ? $"{Name} is empty" : string.Join(". ", _lines);
+        return _lines.Count == 0 ? Strings.T("buffer.empty", Title) : string.Join(". ", _lines.Select(l => l.TrimEnd('.', ' ')));
     }
 
     private void Refresh()
@@ -131,5 +139,5 @@ public sealed class AnnouncementBuffer
         if (rebuilt is not null) Set(rebuilt);
     }
 
-    private string Position() => $"{_lines[_cursor]}. {_cursor + 1} of {_lines.Count}";
+    private string Position() => _lines[_cursor].TrimEnd('.') + ". " + Strings.T("of", _cursor + 1, _lines.Count);
 }

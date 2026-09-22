@@ -34,7 +34,7 @@ through the mod's keys.
 |---|---|---|---|---|
 | Language selection | `states.LanguageSelection` | generic | Name, translator credit, each language with its native and local name, window options, Play | Languages drawn as images are named |
 | Title | `states.Title` | generic | Name, options hint, focused button "n of 4" | |
-| Pause / options overlay | layer of the current scene (`states.Settings.screens`) | generic | Continue, Options, Reset progress, Mods / Main menu | F11. In battle the overlay's buttons are kept apart from battle panels |
+| Pause / options overlay | layer of the current scene (`states.Settings.screens`) | generic | Continue, Options, Reset progress, Mods / Main menu | F11 (the title's "(Esc) Options" hint is spoken as "F11 Options"). In battle the overlay's buttons are kept apart from battle panels |
 | Options → Display | same | generic | Fullscreen, x2, "Disable screen effects, checkbox, off", "Disable shaders…", "Battle animation: very fast, slider" | Checkbox state from `Screen.disablescreeneffects / disableshaders / fullscreen` |
 | Options → Sound | same | generic | "Master volume: 100, slider", new value on change | |
 | Options → Gameplay | same | generic | "Relaxed mode, checkbox, off" and its explanation | `Game.relaxedmode` |
@@ -83,7 +83,7 @@ through the mod's keys.
 
 | Episode types | | | Played at least one fight in every kind: first episodes, Finders Keepers, Double Rubble (two gadgets, both fired from the panel), Worse than a Curse, You Choose You Lose (the Robot's "Ask for a 1…6" panel), Elimination Round, Parallel Universe (Witch, Robot, Jester), Bonus Round | Their twists are text and cards inside verified screens |
 | Reunion Thief's "Steal" | battle | `CombatHandler` | The panel is described in F5 ("press R once per battle to steal it for good"), "Stolen: you keep X", and after the fight "It is yours now" with the card in full | R (Y). The game only hides the button when it works, which is why it first looked dead |
-| Tooltips | any screen | `ScreenMonitor.RefreshTooltips` | A review list "tooltips" (Ctrl+Left / Right to reach it) with every tooltip the screen registers, e.g. the limit break with "ready in 8 HP" | From `displayobjects.TooltipManager.tooltips[*].translatedtext` |
+| Tooltips | any screen | `ScreenMonitor.RefreshTooltips` | At the top of the "Focused item" review list: every tooltip the screen registers, e.g. the limit break with "ready in 8 HP" | From `displayobjects.TooltipManager.tooltips[*].translatedtext` |
 | Mods: details and load order | `states.Modmode` | `ModsHandler` | Each row also gives version and licence; Left / Right move a mod in the load order | The game's own details panel and its Move up / Move down buttons are mouse-only |
 | Quit | title | generic | Leaves the game (exit code 0) | |
 | Screen cursor (mouse fallback) | every screen | `ScreenMonitor.MoveScreenCursor / ClickScreenCursor` | Ctrl+Page Down / Up step through every piece of text on screen, Ctrl+Enter clicks it | Clicked "End turn" in a battle and a mod row in the mod manager. Exists so that nothing is ever mouse-only |

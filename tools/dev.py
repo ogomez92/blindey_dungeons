@@ -41,7 +41,7 @@ def main():
         reply = b""
         while not reply.endswith(b"\n"):
             reply += pipe.read(4096)
-        if a in ("read", "buffer", "cursor"):
+        if a in ("read", "buffer", "cursor", "status", "review"):
             print(f"[{args[i + 1]}]", reply.decode("utf-8", "replace").strip())
         i += 1 if single else 2
         time.sleep(0.25)

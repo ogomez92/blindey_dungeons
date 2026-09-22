@@ -21,6 +21,10 @@ namespace DiceyA11y.Screens;
 /// </summary>
 public static partial class StageCleaner
 {
+    /// <summary>"[heart]2 PS", "8 PS", "5 HP": an abbreviation a screen reader spells out letter by letter.</summary>
+    [GeneratedRegex(@"(?:\[heart\]\s*(?:\[\])?\s*)?(\d+)\s*(?:\[\])?\s*(?:PS|HP)\b")]
+    private static partial Regex HealthAbbreviation();
+
     [GeneratedRegex(@"\[dice\]\s*x\s*(\d+)", RegexOptions.IgnoreCase)]
     private static partial Regex DiceCount();
 
@@ -37,6 +41,14 @@ public static partial class StageCleaner
 
     [GeneratedRegex(@"\[([a-z])_button\]", RegexOptions.IgnoreCase)]
     private static partial Regex FaceButton();
+
+    /// <summary>
+    /// The title's "(Esc) Options" hint, the one keyboard key the game names. The mod makes
+    /// Escape the B button, so the key that opens the options is the one bound to Start.
+    /// Seen across the locales: (Esc), (ESC), (esc), (Échap.), （Esc）, (Esc键), （Esc鍵）.
+    /// </summary>
+    [GeneratedRegex(@"[(（]\s*(?:esc|échap)[^()（）]{0,4}[)）]", RegexOptions.IgnoreCase)]
+    private static partial Regex EscapeHint();
 
     [GeneratedRegex(@"\[lang/lang_([a-z]+)\]", RegexOptions.IgnoreCase)]
     private static partial Regex LanguageImage();
@@ -56,7 +68,8 @@ public static partial class StageCleaner
     private static readonly Dictionary<string, string[]> UnitWords = new()
     {
         ["gold"] = new[] { "gold", "de oro", "oro" },
-        ["heart"] = new[] { "health", "hp", "de salud", "de vida", "salud", "vida" },
+        // "PS" is the Spanish game's abbreviation of "puntos de salud", its HP.
+        ["heart"] = new[] { "health", "hp", "ps", "de salud", "de vida", "salud", "vida" },
         ["star"] = new[] { "xp", "experience", "de experiencia" },
     };
 
@@ -90,6 +103,7 @@ public static partial class StageCleaner
         if (string.IsNullOrWhiteSpace(raw)) return "";
         var s = raw.Replace('\n', ' ').Replace('\r', ' ').Replace('|', ' ');
 
+        s = HealthAbbreviation().Replace(s, m => m.Groups[1].Value + " " + Strings.T("unit.health"));
         s = DiceCount().Replace(s, m => " " + Strings.T("dice.count", m.Groups[1].Value) + " ");
         s = CountedIcon().Replace(s, m =>
         {
@@ -98,7 +112,15 @@ public static partial class StageCleaner
             var named = UnitWords[m.Groups[1].Value.ToLowerInvariant()].Any(w => rest.StartsWith(w, StringComparison.Ordinal));
             return " " + (named ? m.Groups[2].Value : Strings.T("icon." + m.Groups[1].Value.ToLowerInvariant(), m.Groups[2].Value)) + " ";
         });
-        s = FaceButton().Replace(s, m => " " + Strings.T("key." + m.Groups[1].Value.ToUpperInvariant()) + " ");
+        // [l_button] and [r_button] are the shoulders, not face buttons (the tutorial's
+        // "Press [r_button] to use Fury" once came out as "key.R").
+        s = FaceButton().Replace(s, m => m.Groups[1].Value.ToUpperInvariant() switch
+        {
+            "L" => " " + Strings.T("key.LeftShoulder") + " ",
+            "R" => " " + Strings.T("key.RightShoulder") + " ",
+            var face => Strings.Has("key." + face) ? " " + Strings.T("key." + face) + " " : m.Value,
+        });
+        s = EscapeHint().Replace(s, " " + Strings.T("key.Start") + " ");
         s = LanguageImage().Replace(s, m => LanguageNames.TryGetValue(m.Groups[1].Value, out var n) ? n : m.Groups[1].Value);
         s = ElementDamage().Replace(s, m => m.Groups[2].Value + Strings.T("damage." + m.Groups[1].Value.ToLowerInvariant()));
         s = s.Replace("[comma]", ",", StringComparison.OrdinalIgnoreCase).Replace("[;]", ",");   // the game's escape for a literal comma

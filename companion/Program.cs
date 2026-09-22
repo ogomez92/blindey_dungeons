@@ -236,13 +236,11 @@ public static class Program
         // instead of forcing the player to sit through the whole thing.
         _hotkeys.Bind(Keys.F1, () =>
         {
-            _buffers.Get(BufferManager.Help).Set(HelpEntries());
-            var header = _buffers.Select(BufferManager.Help);
+            var header = _buffers.ShowHelp(HelpEntries());
             _speech.Say(header + ". " + _buffers.Current.Current(), interrupt: true);
         });
 
-        _hotkeys.Bind(Keys.F1, () => _speech.Say(_buffers.Get(BufferManager.Help).ReadAll(), interrupt: true),
-            control: true);
+        _hotkeys.Bind(Keys.F1, () => _speech.Say(string.Join(". ", HelpEntries()), interrupt: true), control: true);
         _hotkeys.Bind(Keys.F2, () => _speech.Say(string.IsNullOrEmpty(_lastAnnouncement)
             ? "Nothing announced yet"
             : _lastAnnouncement, interrupt: true));
@@ -272,7 +270,10 @@ public static class Program
         _hotkeys.Bind(Keys.PageUp, () => _speech.Say(_screens.MoveScreenCursor(-1), interrupt: true), control: true);
         _hotkeys.Bind(Keys.Enter, () => _speech.Say(_screens.ClickScreenCursor(), interrupt: true), control: true);
 
-        _hotkeys.Bind(Keys.F10, () => _speech.StopSpeech());
+        // At-a-glance status, from anywhere in a battle (health also on the map).
+        _hotkeys.Bind(Keys.Letter('D'), () => _speech.Say(_screens.DescribeStatus(StatusKind.Dice), interrupt: true), control: true);
+        _hotkeys.Bind(Keys.Letter('H'), () => _speech.Say(_screens.DescribeStatus(StatusKind.Health), interrupt: true), control: true);
+        _hotkeys.Bind(Keys.Letter('E'), () => _speech.Say(_screens.DescribeStatus(StatusKind.Enemies), interrupt: true), control: true);
         _hotkeys.Bind(Keys.F12, () => _speech.Say(WhereAmI(), interrupt: true));
     }
 
@@ -289,7 +290,7 @@ public static class Program
         Map(Keys.Left, PadButton.Left, NavKey.Left);
         Map(Keys.Right, PadButton.Right, NavKey.Right);
         Map(Keys.Enter, PadButton.A, NavKey.Confirm);
-        Map(Keys.Space, PadButton.A, NavKey.Confirm);
+        Map(Keys.Space, PadButton.A, NavKey.Snap);       // A everywhere; on the map it recentres the cursor
         Map(Keys.Escape, PadButton.B, NavKey.Back);
         Map(Keys.Letter('E'), PadButton.X, NavKey.X);
         Map(Keys.Letter('R'), PadButton.Y, NavKey.Y);
@@ -297,6 +298,10 @@ public static class Program
         Map(Keys.Letter('W'), PadButton.RightShoulder, NavKey.RightShoulder);
         Map(Keys.F11, PadButton.Start, NavKey.Start);
         Map(Keys.Backspace, PadButton.Back, NavKey.Select);
+        // Keys only the mod's own screens use (the map's cursor); they never reach the pad.
+        Map(Keys.Comma, PadButton.A, NavKey.PreviousItem);
+        Map(Keys.Period, PadButton.A, NavKey.NextItem);
+        Map(Keys.Letter('P'), PadButton.A, NavKey.Path);
 
         // In battle the game shows the enemy's cards while the right stick is held up
         // (found by trying every button and axis: only axis 3 = -1 sets
@@ -318,7 +323,7 @@ public static class Program
         [NavKey.Up] = PadButton.Up, [NavKey.Down] = PadButton.Down, [NavKey.Left] = PadButton.Left, [NavKey.Right] = PadButton.Right,
         [NavKey.Confirm] = PadButton.A, [NavKey.Back] = PadButton.B, [NavKey.X] = PadButton.X, [NavKey.Y] = PadButton.Y,
         [NavKey.LeftShoulder] = PadButton.LeftShoulder, [NavKey.RightShoulder] = PadButton.RightShoulder,
-        [NavKey.Start] = PadButton.Start, [NavKey.Select] = PadButton.Back,
+        [NavKey.Start] = PadButton.Start, [NavKey.Select] = PadButton.Back, [NavKey.Snap] = PadButton.A,
     };
 
     // A screen may claim a key for itself (the map does); only keys that went to the pad
@@ -329,6 +334,7 @@ public static class Program
     {
         _screens.NoteInput();
         if (_screens.HandleKey(nav)) return;
+        if (!PadFor.ContainsKey(nav)) return;
         _screens.WakeGamepadMode();
         lock (OnPad) OnPad.Add(nav);
         _pad.Down(PadFor[nav]);
@@ -365,6 +371,19 @@ public static class Program
                 "prev" => _screens.MoveScreenCursor(-1),
                 "click" => _screens.ClickScreenCursor(),
                 _ => "unknown cursor command",
+            };
+        if (parts.Length == 2 && parts[0] == "status" && Enum.TryParse<StatusKind>(parts[1], true, out var kind))
+            return _screens.DescribeStatus(kind);
+        if (parts.Length == 2 && parts[0] == "review")
+            return parts[1] switch
+            {
+                "up" => _buffers.Current.MoveDeeper(),
+                "down" => _buffers.Current.MoveTowardTop(),
+                "next" => _buffers.NextBuffer(),
+                "prev" => _buffers.PreviousBuffer(),
+                "help" => _buffers.ShowHelp(HelpEntries()),
+                "all" => _buffers.Current.Title + ": " + _buffers.Current.ReadAll(),
+                _ => "unknown review command",
             };
         if (parts.Length == 2 && parts[0] == "buffer")
             return _buffers.Get(parts[1].Replace('_', ' ')).ReadAll();

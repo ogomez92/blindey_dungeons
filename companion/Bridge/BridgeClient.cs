@@ -91,11 +91,133 @@ public sealed class BridgeClient : IDisposable
         _pipe = null;
     }
 
+    // ------------------------------------------------------------------ frame cache
+    //
+    // A request costs one game frame, and a battle poll used to make more than twenty of them
+    // one after another: a third of a second before anything could be spoken. The bridge
+    // serves up to 64 requests per frame, though, so reads that are sent together cost one
+    // frame together. A scope remembers every pure read made inside it; a learning scope (the
+    // poll) also sends, up front and all at once, the reads the previous poll made.
+
+    private static readonly string[] ReadCommands = { "eval", "batch", "pluck", "dump", "iter", "stagetext" };
+
+    /// <summary>Calls known to have no side effects; anything else with a "(" is never cached or replayed.</summary>
+    private static readonly string[] PureCalls =
+    {
+        ".translate(", ".translatearray(", ".getequipmenttemplate(", ".getstring(", ".getitem(", ".keys(", ".get(",
+        ".isopen(", ".numepisodeswon(", ".toString(",
+    };
+
+    /// <summary>Diagnostics: the reads of the current scope that were not answered ahead of time.</summary>
+    public List<string> Missed { get; } = new();
+
+    private readonly object _scopeLock = new();
+    private Dictionary<string, string>? _cache;
+    private int _cacheThread;
+    private List<string> _learned = new();
+    private readonly HashSet<string> _asked = new();
+    private string _learnedFor = "";
+
+    private static bool IsPureRead(string command, string argument)
+    {
+        if (Array.IndexOf(ReadCommands, command) < 0) return false;
+        var rest = argument;
+        foreach (var call in PureCalls) rest = rest.Replace(call, "");
+        if (rest.Contains('(')) return false;
+        // Handles expire; only #0 (the application object) is stable across polls.
+        for (var i = rest.IndexOf('#'); i >= 0; i = rest.IndexOf('#', i + 1))
+            if (i + 1 >= rest.Length || rest[i + 1] != '0' || (i + 2 < rest.Length && char.IsDigit(rest[i + 2]))) return false;
+        return true;
+    }
+
+    private sealed class Scope : IDisposable
+    {
+        private readonly Action _close;
+        public Scope(Action close) => _close = close;
+        public void Dispose() => _close();
+    }
+
+    private static readonly IDisposable NoScope = new Scope(() => { });
+
+    /// <summary>
+    /// Until disposed, pure reads made on this thread are answered once and remembered.
+    /// With <paramref name="learnKey"/> set, the reads made in the previous scope of the same
+    /// key are sent first, together, so the code that follows finds them already answered.
+    /// </summary>
+    public IDisposable OpenScope(string? learnKey = null)
+    {
+        lock (_scopeLock)
+        {
+            if (_cache != null) return NoScope;   // nested, or another thread's: leave it alone
+            _cache = new Dictionary<string, string>();
+            _asked.Clear();
+            Missed.Clear();
+            _cacheThread = Environment.CurrentManagedThreadId;
+        }
+        if (learnKey != null)
+        {
+            if (learnKey != _learnedFor) { _learned = new(); _learnedFor = learnKey; }
+            Warm(_learned.Select(k => { var tab = k.IndexOf('\t'); return (k[..tab], k[(tab + 1)..]); }));
+        }
+        return new Scope(() =>
+        {
+            lock (_scopeLock)
+            {
+                if (learnKey != null) _learned = _asked.ToList();
+                _cache = null;
+            }
+        });
+    }
+
+    /// <summary>Sends these reads together (one frame) so the calls that follow are already answered.</summary>
+    public void Warm(IEnumerable<(string Command, string Argument)> reads)
+    {
+        var cache = _cache;
+        if (cache == null || _cacheThread != Environment.CurrentManagedThreadId) return;
+        var sent = new List<(string Key, Task<string> Reply)>();
+        foreach (var (command, argument) in reads)
+        {
+            var key = command + "\t" + argument;
+            if (cache.ContainsKey(key) || sent.Any(s => s.Key == key) || !IsPureRead(command, argument)) continue;
+            sent.Add((key, Send(command, argument, null)));
+        }
+        // The game does not tick while loading: one wait for the lot, not one each.
+        var deadline = DateTime.UtcNow.AddMilliseconds(3000);
+        foreach (var (key, reply) in sent)
+        {
+            var left = deadline - DateTime.UtcNow;
+            if (reply.Wait(left > TimeSpan.Zero ? left : TimeSpan.Zero)) cache[key] = reply.Result;
+        }
+    }
+
+    public void WarmBatch(params string[] expressions) => Warm(new[] { ("batch", string.Join(Unit, expressions)) });
+
     /// <summary>Raw request. Returns "!..." on any failure; never throws.</summary>
     public string Request(string command, string argument = "", string? extra = null, int timeoutMs = 3000)
     {
+        var cache = _cache;
+        var cacheable = cache != null && extra == null && _cacheThread == Environment.CurrentManagedThreadId && IsPureRead(command, argument);
+        if (cacheable) _asked.Add(command + "\t" + argument);
+        if (cacheable && cache!.TryGetValue(command + "\t" + argument, out var known)) return known;
+        // Something is about to change in the game: what was read before it no longer holds.
+        if (!cacheable && cache != null && _cacheThread == Environment.CurrentManagedThreadId) cache.Clear();
+
+        if (cache != null && _cacheThread == Environment.CurrentManagedThreadId) Missed.Add(command + " " + (argument.Length > 90 ? argument[..90] : argument));
+        var task = Send(command, argument, extra);
+        var reply = task.Wait(timeoutMs) ? task.Result : "!timeout";
+        if (cacheable && !reply.StartsWith("!timeout", StringComparison.Ordinal)) cache![command + "\t" + argument] = reply;
+        return reply;
+    }
+
+    private static readonly Task<string> NotConnected = Task.FromResult("!bridge not connected");
+
+    /// <summary>Requests actually sent to the game; the difference across a poll is what it cost in frames at worst.</summary>
+    public long Sent => Interlocked.Read(ref _nextId);
+
+    private Task<string> Send(string command, string argument, string? extra)
+    {
         var pipe = _pipe;
-        if (!_connected || pipe == null) return "!bridge not connected";
+        if (!_connected || pipe == null) return NotConnected;
 
         var id = Interlocked.Increment(ref _nextId);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -115,13 +237,12 @@ public sealed class BridgeClient : IDisposable
         {
             _pending.TryRemove(id, out _);
             DropConnection();
-            return "!bridge write failed";
+            return Task.FromResult("!bridge write failed");
         }
 
         // The game stops ticking while it is loading or minimised; a timeout is not fatal.
-        if (tcs.Task.Wait(timeoutMs)) return tcs.Task.Result;
-        _pending.TryRemove(id, out _);
-        return "!timeout";
+        // (A reply that never comes leaves its entry behind until the connection drops.)
+        return tcs.Task;
     }
 
     public GameValue Eval(string expression) => new(Request("eval", expression));

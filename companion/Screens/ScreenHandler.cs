@@ -74,7 +74,9 @@ public class ScreenHandler
     /// </summary>
     public virtual bool OnKey(ScreenContext ctx, NavKey key)
     {
-        if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right)
+        // Left and right on a slider change its value; the value is the answer, not the focus again.
+        var onSlider = ctx.State.Focus?.RawLabel == SliderLabel && key is NavKey.Left or NavKey.Right;
+        if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right && !onSlider)
         {
             _deadKeyPending = true;
             _deadKeyAt = DateTime.UtcNow;
@@ -135,10 +137,21 @@ public class ScreenHandler
             _heldFocus = "";
             _announcedFocus = ctx.State.FocusKey;
             _toggleSeen = ReadToggle(ctx);
-            if (ctx.State.Focus != null) ctx.Say(DescribeFocus(ctx), interrupt: RecentInput(ctx));
+            _sliderValue = SliderValue(ctx);
+            if (ctx.State.Focus != null)
+            {
+                var text = DescribeFocus(ctx);
+                ctx.Say(text, interrupt: RecentInput(ctx));
+                ctx.FocusItem(FocusLines(ctx, text));
+            }
         }
         else
         {
+            // A slider being moved: only the new value, at once, cutting off the previous one.
+            var value = SliderValue(ctx);
+            if (value.Length > 0 && value != _sliderValue) ctx.Say(value, interrupt: true);
+            _sliderValue = value;
+
             // Same control, new state: the player just flipped it.
             var toggle = ReadToggle(ctx);
             if (toggle.Length > 0 && toggle != _toggleSeen) ctx.Say(toggle, interrupt: true);
@@ -155,6 +168,7 @@ public class ScreenHandler
         foreach (var p in paragraphs)
         {
             if (labels.Contains(p.Key)) continue;
+            if (ctx.State.Focus?.RawLabel == SliderLabel && IsSliderValue(p.Text)) continue;   // said with the slider
             if (!ShouldSpeak(ctx, p)) continue;
             ctx.SayEvent(p.Text);
         }
@@ -170,6 +184,38 @@ public class ScreenHandler
         var v = ctx.Bridge.Eval(expression);
         return v.Kind != Bridge.GameValueKind.Bool ? "" : Strings.T(v.AsBool() ? "control.on" : "control.off");
     }
+
+    private string _sliderValue = "";
+
+    private static bool IsSliderValue(string text) => text.Length is > 0 and < 6 && text.All(c => char.IsDigit(c) || c == '%');
+
+    /// <summary>The number drawn on the focused slider's row.</summary>
+    private static string SliderValue(ScreenContext ctx) => SliderValueText(ctx)?.Text ?? "";
+
+    private static Paragraph? SliderValueText(ScreenContext ctx)
+    {
+        var focus = ctx.State.Focus;
+        if (focus == null || focus.RawLabel != SliderLabel) return null;
+        return ctx.Stage.Current.Where(p => Math.Abs(p.Y - focus.Y) < 120 && IsSliderValue(p.Text))
+                  .OrderBy(p => Math.Abs(p.Y - focus.Y)).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// A slider's caption is drawn on the same line as its number, to the left of it (measured:
+    /// caption y 684, number y 687, the slider itself y 636). Going by the number's line keeps
+    /// out what merely shares the row - the cards of the battle the pause menu lies over.
+    /// </summary>
+    private static string SliderCaption(ScreenContext ctx)
+    {
+        var value = SliderValueText(ctx);
+        if (value == null) return "";
+        var labels = new HashSet<string>(ctx.State.Buttons.Select(b => StageCleaner.Key(b.Label)));
+        return string.Join(" ", ctx.Stage.Current.Where(p => Math.Abs(p.Y - value.Y) < 20 && p.X < value.X && !IsSliderValue(p.Text) && !labels.Contains(p.Key))
+                                   .Select(p => p.Text.TrimEnd(':', ' ')));
+    }
+
+    /// <summary>What the item list holds for the focused control. One line unless a screen knows better.</summary>
+    protected virtual IEnumerable<string> FocusLines(ScreenContext ctx, string spoken) => new[] { spoken };
 
     /// <summary>Text on the same row as the focused control that is not itself a control's label.</summary>
     private static string RowText(ScreenContext ctx, NavButton focus)
@@ -188,7 +234,9 @@ public class ScreenHandler
         if (focus == null) return Strings.T("nothing.focus");
         if (focus.RawLabel == SliderLabel)
         {
-            var row = RowText(ctx, focus);
+            var value = SliderValue(ctx);
+            var caption = SliderCaption(ctx);
+            var row = caption.Length > 0 ? caption + ": " + value : RowText(ctx, focus);
             return (row.Length > 0 ? row + ", " : "") + Strings.T("control.slider");
         }
         var state = ReadToggle(ctx);
@@ -235,9 +283,17 @@ public class ScreenHandler
     /// <summary>F5: whatever a sighted player would take in at a glance on this screen.</summary>
     public virtual string DescribeContext(ScreenContext ctx) => DescribeScreen(ctx);
 
+    /// <summary>Ctrl+D / Ctrl+H / Ctrl+E. Health is known wherever there is a run; the rest is the battle's.</summary>
+    public virtual string DescribeStatus(ScreenContext ctx, StatusKind kind)
+    {
+        if (kind != StatusKind.Health) return Strings.T("status.battle_only");
+        var v = ctx.Bridge.Batch("{Game}.player.hp", "{Game}.player.maxhp");
+        return v[0].Exists && v[1].AsInt() > 0 ? Strings.T("battle.health", v[0].AsInt(), v[1].AsInt()) : Strings.T("status.no_run");
+    }
+
     public virtual IEnumerable<string> Help => new[]
     {
         Strings.T("help.nav"), Strings.T("help.read"), Strings.T("help.pad"),
-        Strings.T("help.buffers"), Strings.T("help.cursor"), Strings.T("help.stop"),
+        Strings.T("help.buffers"), Strings.T("help.cursor"), Strings.T("help.where"),
     };
 }

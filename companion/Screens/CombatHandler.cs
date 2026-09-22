@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DiceyA11y.Bridge;
 using DiceyA11y.Core;
+using DiceyA11y.Input;
 
 namespace DiceyA11y.Screens;
 
@@ -29,7 +30,8 @@ public sealed partial class CombatHandler : ScreenHandler
     private const string Hover = Combat + ".gamepad_hoverdice";
     private const string LimitPrompt = "{displayobjects.LimitBreakPrompt}.showing";
 
-    [GeneratedRegex(@"^[-+]?\d+$")]
+    /// <summary>A number, or the counters of several status icons read as one line ("1 1 1").</summary>
+    [GeneratedRegex(@"^[-+]?\d+(\s+[-+]?\d+)*$")]
     private static partial Regex BareNumber();
 
     /// <summary>The HUD's "2 dice" beside each name, after cleaning, in either supported language.</summary>
@@ -59,6 +61,9 @@ public sealed partial class CombatHandler : ScreenHandler
     private DateTime _previewSince;
     private readonly HashSet<string> _spokenThisBattle = new();
     private readonly BattleNarrator _narrator = new();
+    private readonly VirtualPad _pad;
+
+    public CombatHandler(VirtualPad pad) => _pad = pad;
     private string _phase = "";
     private List<Rect> _cardRects = new();
 
@@ -72,7 +77,11 @@ public sealed partial class CombatHandler : ScreenHandler
         _limitPrompt = _fleePrompt = _fleeing = false;
         _reunionStolen = ctx.Bridge.Eval("{Reunion}.thiefcard_selected") is { Exists: true } kept ? kept.AsString() : "";
         _spellSlot = -2;
+        _wanted = null;
+        _refused.Clear();
         _choicesSaid = "";
+        _dialog = null;
+        _paused = false;
         _phase = "";
         _spokenThisBattle.Clear();
         _narrator.Reset();
@@ -83,8 +92,13 @@ public sealed partial class CombatHandler : ScreenHandler
     public override void OnPoll(ScreenContext ctx)
     {
         _cardRects = ReadCardRects(ctx);
+        _paused = PauseMenuOpen(ctx);
         base.OnPoll(ctx);
         _narrator.Poll(ctx);
+
+        // The pause menu (F11) is a screen of its own laid over the battle. The card cursor is
+        // frozen beneath it, and must stay silent while the player moves through the options.
+        if (_paused) { _focusKey = ""; return; }
 
         AnnounceEnemyPreview(ctx);
         AnnounceChoices(ctx);
@@ -92,33 +106,214 @@ public sealed partial class CombatHandler : ScreenHandler
         if (AnnouncePrompts(ctx)) return;   // a prompt is up: the card cursor is frozen beneath it
         if (AnnounceSpellSlot(ctx)) return;
 
+        // Identity uses where a card or dice is going (tx/ty, homex/homey), not where it is:
+        // they glide into place, and a position that changes every frame is not a new focus.
         var v = ctx.Bridge.Batch(Combat + ".state", Combat + ".gamepad_dicemode",
-                                 Selected + ".name", Selected + ".x", Selected + ".y",
-                                 Hover + ".basevalue", Hover + ".modifier", Hover + ".x", Hover + ".y");
+                                 Selected + ".name", Selected + ".tx", Selected + ".ty",
+                                 Hover + ".basevalue", Hover + ".modifier", Hover + ".homex", Hover + ".homey", Hover + ".id",
+                                 Selected + ".skillcard");
         if (v[0].IsError) return;
 
         var phase = v[0].AsString();
         var playerActing = phase.StartsWith("playerturn", StringComparison.Ordinal) && !_narrator.Ended;
         _phase = phase;
-        if (!playerActing) { _focusKey = ""; return; }
+        if (!playerActing) { _focusKey = ""; _wanted = null; _refused.Clear(); return; }
+        if (!v[1].AsBool() && AwaitingListMove(ctx, v[2], v[3], v[4])) return;
 
         var diceMode = v[1].AsBool();
         var key = diceMode
-            ? $"dice:{v[5].Raw}:{v[6].Raw}:{v[7].AsDouble():0},{v[8].AsDouble():0}"
+            ? $"dice:{v[5].Raw}:{v[6].Raw}:{v[7].AsDouble():0},{v[8].AsDouble():0}:{v[9].Raw}"
             : $"card:{v[2].Raw}:{v[3].AsDouble():0},{v[4].AsDouble():0}";
+
+        // Described on every poll, not only when the cursor moves: a read made in one poll is
+        // sent ahead with the next poll's (BridgeClient.OpenScope), so by the time the cursor
+        // does move everything needed to speak is already here. This is what removed the
+        // second of silence after each arrow key.
+        var spoken = diceMode ? DiceParts(ctx, out _) : CardParts(ctx, Selected);
+        var lines = diceMode ? spoken.Concat(CardParts(ctx, Selected)).ToList() : spoken;
+        var (listed, listedAt) = diceMode ? (new List<ListCard>(), -1) : ListCards(ctx);
         if (key == _focusKey) return;
 
         // A panel whose button has the game's focus (gadget, Calculate) was just read as a button.
-        if (ctx.State.Focus != null && !diceMode) { _focusKey = key; return; }
+        // On a plain card a focused button is either a choice laid over the battle or the state
+        // of a moment ago (the cursor just left a panel): the card is still news once it is gone.
+        if (ctx.State.Focus != null && !diceMode) { if (v[10].AsString().Length > 0) _focusKey = key; return; }
 
-        // Cards and dice glide into place, so the same one reports a new position every
-        // frame for a moment. Speak only once it has come to rest.
-        if (key != _pendingKey || !ctx.Stage.Settled) { _pendingKey = key; return; }
+        // After a key press a card is spoken at once. A dice waits one more poll, because the
+        // card's live text ("Do 5 damage") is redrawn a frame after the hover moves; anything
+        // that moved on its own waits for the stage to settle.
+        // E ends the turn, but the phase stays "allocatedice" for two more seconds (measured)
+        // while the cards slide away; nothing under the cursor is news during that.
+        if (DateTime.UtcNow < _quietUntil) { _pendingKey = key; return; }
+
+        // Enter on a dice plays it, and the card then redraws itself over a few frames (both
+        // the old and the new text were once read together): only arrows and Escape leave a
+        // card at rest, and only they get the immediate echo in card mode.
+        var fromKey = DateTime.UtcNow - _navKeyAt < TimeSpan.FromMilliseconds(700) && (diceMode || _navKey != NavKey.Confirm);
+        var ready = fromKey && !diceMode || key == _pendingKey && (fromKey || ctx.Stage.Settled);
+        if (!ready) { _pendingKey = key; return; }
         _focusKey = key;
 
-        var text = diceMode ? DescribeHoverDice(ctx) + DicePreview(ctx) : DescribeSelectedCard(ctx, brief: true);
-        if (text.Length > 0) ctx.Say(text, interrupt: RecentInput(ctx));
+        var text = string.Join(diceMode ? ". " : ", ", spoken);
+        var position = ListPosition(listed.Count, listedAt);
+        if (position.Length > 0) text = text.TrimEnd('.', ' ') + ", " + position;
+        // Cards are dealt again each turn and land in new places: the same card under a cursor
+        // nobody moved is not news, however its position changed.
+        var repeat = !fromKey && string.Equals(text, _focusSaid, StringComparison.OrdinalIgnoreCase) && DateTime.UtcNow - _focusSaidAt < TimeSpan.FromSeconds(4);
+        if (text.Length > 0 && !repeat) ctx.Say(text, interrupt: fromKey);
+        _focusSaid = text;
+        _focusSaidAt = DateTime.UtcNow;
+        ctx.FocusItem(lines);
     }
+
+    /// <summary>
+    /// Whether the game has a speech or tutorial box up. Boxes are displayobjects.Textbox
+    /// (field "dismissed"): the tutorial keeps its own as TextboxCommand in Tutorial.textboxes
+    /// (actualtextbox), everything else lives in the Art.textboxmap string map. Both were
+    /// found empty in a battle without speech (so labels such as a burning dice's "Costs 2
+    /// health" do not count). HYPOTHESIS: not yet observed while a box was actually open.
+    /// </summary>
+    private static bool TextboxOpen(ScreenContext ctx)
+    {
+        var tutorial = ctx.Bridge.Pluck("{Tutorial}.textboxes", "actualtextbox.dismissed");
+        if (tutorial != null && tutorial.Any(r => r[0].Exists && !r[0].AsBool())) return true;
+        var keys = ctx.Bridge.Request("iter", "{Art}.textboxmap.keys()");
+        return keys.Length > 0 && !keys.StartsWith('!');
+    }
+
+    private bool _paused;
+    private Paragraph? _dialog;
+    private DateTime _navKeyAt, _focusSaidAt, _quietUntil;
+    private NavKey _navKey;
+    private string _focusSaid = "";
+
+    public override bool OnKey(ScreenContext ctx, NavKey key)
+    {
+        // Only keys that move the cursor earn an immediate echo. E (end turn) sends the cards
+        // sliding away, and each frame of that would otherwise count as a new focus.
+        if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right or NavKey.Confirm or NavKey.Back) { _navKeyAt = DateTime.UtcNow; _navKey = key; }
+        if (key == NavKey.X && ctx.State.Focus == null && !_limitPrompt && !_fleePrompt) _quietUntil = DateTime.UtcNow.AddSeconds(2.5);
+        if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right && MoveCardCursor(ctx, key is NavKey.Left or NavKey.Up ? -1 : 1)) return true;
+        return base.OnKey(ctx, key);
+    }
+
+    /// <summary>
+    /// The game lays cards out in columns and stacks two small ones in the same column
+    /// (Matchstick over Bump), so its d-pad needs Down to reach the lower one: a card a blind
+    /// player only finds by chance. The mod owns the card cursor instead. The cards are one
+    /// list, left to right and top to bottom within a column; Left/Up is the previous card,
+    /// Right/Down the next, and the ends do not wrap.
+    /// False leaves the key to the game: dice mode, a panel's buttons, prompts, dialogue.
+    /// Verified per character: Warrior, Thief (stolen card), Robot (Calculate, jackpot),
+    /// Inventor (gadget), Witch (four spell slots and the book), Jester (hand).
+    /// </summary>
+    private bool MoveCardCursor(ScreenContext ctx, int step)
+    {
+        if (_paused || _limitPrompt || _fleePrompt || _previewing || _spellSlot != -2 || _narrator.Ended) return false;
+        var v = ctx.Bridge.Batch(Combat + ".state", Combat + ".gamepad_dicemode", Combat + ".gamepad_buttonmode", Selected + ".skillcard");
+        if (!v[0].AsString().StartsWith("playerturn", StringComparison.Ordinal) || v[1].AsBool() || v[2].AsBool()) return false;
+
+        // A panel card under the cursor focuses its button before A is pressed (seen: the Robot's
+        // Calculate), and the game's own arrows then wrap from the panel to some other card. One
+        // button is just the panel's face and the list goes on; several buttons (jackpot prizes,
+        // the six request dice) are a choice, and the arrows belong to it.
+        if (ctx.State.Focus is { } focused
+            && (v[3].AsString().Length == 0 || focused.RawLabel == "dicebutton" || ctx.State.Buttons.Select(b => b.RawLabel).Distinct().Count() > 1)) return false;
+        if (TextboxOpen(ctx)) return false;
+
+        var (cards, at) = ListCards(ctx);
+        if (at < 0) return false;   // the cursor is on something this list does not know: the game's own keys still work
+
+        var to = at + step;
+        if (to < 0 || to >= cards.Count)
+        {
+            // The end of the list must not be silent (see AnswerDeadKey): say where the cursor still is.
+            var here = TextCleanup.Join(DescribeFocusBrief(ctx).TrimEnd('.', ' '), ListPosition(cards.Count, at));
+            if (here.Length > 0) ctx.Say(here, interrupt: true);
+            return true;
+        }
+
+        // The move itself is the game's: one d-pad press, so its click, its highlight and its
+        // own cursor state all follow (writing the static alone moved the cursor in silence,
+        // which the player noticed at once). Within a column that is Up or Down. Across columns
+        // it is Left or Right, and gamepad_preferredrow = the card's displayrow says which of
+        // two stacked cards the game lands on (verified: Left from a tall card onto the lower
+        // of two, the Witch's lower slots). OnPoll checks where the cursor ended up
+        // (AwaitingListMove).
+        var (from, target) = (cards[at], cards[to]);
+        var sameColumn = Math.Abs(from.X - target.X) < 1;
+        var button = sameColumn ? (target.Y > from.Y ? PadButton.Down : PadButton.Up) : (target.X > from.X ? PadButton.Right : PadButton.Left);
+        if (!ctx.State.GamepadMode) ctx.Bridge.Eval("{ControlMode}.notifyGamepadInput()");
+        if (!sameColumn) ctx.Bridge.SetField(Combat, "gamepad_preferredrow", target.Row.ToString());
+        _wanted = new WantedCard(target.Index, target.Name, target.X, target.Y, DateTime.UtcNow);
+        _pad.Down(button);
+        _ = Task.Run(async () => { await Task.Delay(60); _pad.Up(button); });
+        return true;   // the poll speaks the new card: its key changed and an arrow was just pressed
+    }
+
+    private sealed record ListCard(int Index, string Name, double X, double Y, int Row, string Skill);
+
+    /// <summary>
+    /// What the cursor can land on, in list order, and where the cursor is in it (-1: nowhere
+    /// known). Cards still in play and on screen: a used card is not ready, and the Jester's
+    /// played cards stay in Fighter.equipment parked off screen. The Jester's deck panel is not
+    /// in equipment at all (the game's own arrows wrap past it).
+    /// Reunion's skill panels ARE in the list (an earlier note said the cursor never lands on
+    /// them, and a first version left them out): the Thief's holds a playable enemy card, the
+    /// Witch's takes a dice ("requires 5: 10 damage"), and the raw d-pad lands on both. The
+    /// Warrior's refuses the cursor while his Sword is in play, and takes it by itself once the
+    /// Sword is used: what the game refuses is learned by trying (AwaitingListMove, _refused).
+    /// </summary>
+    private (List<ListCard> Cards, int At) ListCards(ScreenContext ctx)
+    {
+        var rows = ctx.Bridge.Pluck("{Game}.player.equipment", "name", "tx", "ty", "ready", "show", "skillcard", "displayrow");
+        var v = ctx.Bridge.Batch(Selected + ".name", Selected + ".tx", Selected + ".ty");
+        if (rows == null || !v[0].Exists) return (new List<ListCard>(), -1);
+        var cards = rows.Select((r, i) => (Row: r, Index: i))
+                        .Where(c => c.Row[0].Exists && c.Row[3].AsBool(true) && c.Row[4].AsBool(true)
+                                    && c.Row[1].AsDouble() > -200 && c.Row[1].AsDouble() < 3840 && c.Row[2].AsDouble() > -200 && c.Row[2].AsDouble() < 2100)
+                        .Select(c => new ListCard(c.Index, c.Row[0].AsString(), c.Row[1].AsDouble(), c.Row[2].AsDouble(), c.Row[6].AsInt(), c.Row[5].AsString()))
+                        .OrderBy(c => Math.Round(c.X)).ThenBy(c => c.Y).ToList();
+        bool Selected_(ListCard c) => c.Name == v[0].AsString() && Math.Abs(c.X - v[1].AsDouble()) < 1 && Math.Abs(c.Y - v[2].AsDouble()) < 1;
+        // Known to refuse (so the count is right from the first key); anything else is learned.
+        // Either way a card the game itself put the cursor on is in the list.
+        cards.RemoveAll(c => (_refused.Contains(c.Index) || c.Skill == "warriorreunion") && !Selected_(c));
+        return (cards, cards.FindIndex(Selected_));
+    }
+
+    /// <summary>Panels that only show Fighter.stolencard: the Thief's third card, and his Reunion panel.</summary>
+    private static bool ShowsStolenCard(string skillcard) => skillcard is "stolencard" or "thiefreunion";
+
+    /// <summary>"2 of 5": tells two copies of a card apart and says when the list has ended.</summary>
+    private static string ListPosition(int count, int at) => at >= 0 && count > 1 ? Strings.T("of", at + 1, count) : "";
+
+    private sealed record WantedCard(int Index, string Name, double X, double Y, DateTime At);
+
+    private WantedCard? _wanted;
+
+    /// <summary>
+    /// After a list move: true while the game's cursor has not reached the card the player
+    /// asked for. A card the game will not give the cursor to (seen: Reunion's Warrior panel
+    /// while he still has a card to play - the game even undoes a direct write of the cursor
+    /// every frame, which is why there is no such write here) leaves the list for the rest of
+    /// the turn, and the player hears where the cursor still is instead of silence.
+    /// </summary>
+    private bool AwaitingListMove(ScreenContext ctx, GameValue name, GameValue tx, GameValue ty)
+    {
+        if (_wanted is not { } want) return false;
+        if (name.AsString() == want.Name && Math.Abs(tx.AsDouble() - want.X) < 1 && Math.Abs(ty.AsDouble() - want.Y) < 1) { _wanted = null; return false; }
+        if (DateTime.UtcNow - want.At < TimeSpan.FromMilliseconds(250)) return true;
+        _wanted = null;
+        _refused.Add(want.Index);
+        ctx.Log($"Card list: the game kept the cursor on {name.AsString()} and off {want.Name}; left out of the list this turn.");
+        var (cards, at) = ListCards(ctx);
+        var here = TextCleanup.Join(DescribeFocusBrief(ctx).TrimEnd('.', ' '), ListPosition(cards.Count, at));
+        if (here.Length > 0) ctx.Say(here, interrupt: true);
+        return false;
+    }
+
+    /// <summary>Equipment indexes the game refused to move the cursor to this turn.</summary>
+    private readonly HashSet<int> _refused = new();
 
     /// <summary>
     /// Automatic reading skips what the cursor and the narrator already cover: card faces,
@@ -126,6 +321,8 @@ public sealed partial class CombatHandler : ScreenHandler
     /// </summary>
     protected override bool ShouldSpeak(ScreenContext ctx, Paragraph p)
     {
+        if (_paused) return true;
+        if (_narrator.IsStatusLabel(p.Text)) return false;   // "Burn 1" floating over a fighter: the narrator said it
         if (BareNumber().IsMatch(p.Text) || HealthFraction().IsMatch(p.Text)) return false;
         if (HealthLead().IsMatch(p.Text)) return false;   // "15/24 FURY": the health bar and its label
         if (_cardRects.Any(r => r.Contains(p))) return false;
@@ -135,25 +332,34 @@ public sealed partial class CombatHandler : ScreenHandler
 
         // The rest of the HUD (fighter names, dice counts, the end-turn and enemy-moves
         // prompts) is redrawn every turn. Once per battle is orientation; every turn is noise.
-        return _spokenThisBattle.Add(p.Key);
+        if (!_spokenThisBattle.Add(p.Key)) return false;
+        // Speech and tutorial lines are sentences; the HUD's own labels are all capitals.
+        if (p.Text.Any(char.IsLower)) _dialog = p;
+        return true;
     }
 
     protected override string CursorState(ScreenContext ctx)
     {
         var v = ctx.Bridge.Batch(Combat + ".gamepad_dicemode", Selected + ".name", Selected + ".tx", Selected + ".ty",
                                  Hover + ".basevalue", Hover + ".x", Combat + ".state", Combat + ".gamepad_selectedslot");
-        return string.Join("|", v.Select(x => x.Raw));
+        return ctx.State.FocusKey + "|" + string.Join("|", v.Select(x => x.Raw));
     }
 
-    protected override int DeadKeyDelayMs => 650;
+    protected override int DeadKeyDelayMs => 300;
 
     protected override bool ReadColumnAboveTwins => false;
 
     protected override string DescribeFocusBrief(ScreenContext ctx)
     {
+        // A menu or panel with the game's focus answers for itself, never the card under it.
+        if (ctx.State.Focus != null || _paused) return DescribeFocus(ctx);
+        // While somebody is talking the arrows move nothing: say the line again, not a card.
+        // (Before the dice are thrown there is no card to act on, so a line on screen is the answer.)
+        if (_dialog != null && ctx.Stage.Current.Any(p => p.Key == _dialog.Key)
+            && (!_phase.EndsWith("allocatedice", StringComparison.Ordinal) || TextboxOpen(ctx))) return _dialog.Text;
         if (!_phase.StartsWith("playerturn", StringComparison.Ordinal)) return "";
         if (_limitPrompt || _fleePrompt) return DescribeFocus(ctx);
-        return ctx.Bridge.Eval(Combat + ".gamepad_dicemode").AsBool() ? DescribeHoverDice(ctx) : DescribeSelectedCard(ctx, brief: true);
+        return ctx.Bridge.Eval(Combat + ".gamepad_dicemode").AsBool() ? string.Join(". ", DiceParts(ctx, out _)) : DescribeSelectedCard(ctx, brief: true);
     }
 
     /// <summary>
@@ -215,7 +421,7 @@ public sealed partial class CombatHandler : ScreenHandler
         if (_fleePrompt) return Strings.T("flee.prompt");
         var diceMode = ctx.Bridge.Eval(Combat + ".gamepad_dicemode").AsBool();
         var text = diceMode
-            ? DescribeHoverDice(ctx) + ". " + DescribeSelectedCard(ctx, brief: false)
+            ? string.Join(". ", DiceParts(ctx, out _)) + ". " + DescribeSelectedCard(ctx, brief: false)
             : DescribeSelectedCard(ctx, brief: false);
         return text.Trim(' ', '.').Length == 0 ? Strings.T("nothing.focus") : text;
     }
@@ -321,15 +527,20 @@ public sealed partial class CombatHandler : ScreenHandler
     private string DescribeSelectedCard(ScreenContext ctx, bool brief) => DescribeCard(ctx, Selected, brief);
 
     private static string DescribeCard(ScreenContext ctx, string Selected, bool brief)
+        => string.Join(brief ? ", " : ". ", CardParts(ctx, Selected));
+
+    /// <summary>A card piece by piece: name and rules text, what it takes, the state it is in.</summary>
+    private static List<string> CardParts(ScreenContext ctx, string Selected)
     {
-        if (ctx.Bridge.Eval(Selected + ".skillcard").AsString() == "witch") return DescribeSpellbook(ctx);
+        if (ctx.Bridge.Eval(Selected + ".skillcard").AsString() == "witch") return new List<string> { DescribeSpellbook(ctx) };
 
         // The Thief's third card is a placeholder (skillcard "stolencard"); what it shows and
         // plays is Fighter.stolencard, this turn's copy of one of the enemy's cards.
         var stolen = false;
-        if (ctx.Bridge.Eval(Selected + ".skillcard").AsString() == "stolencard")
+        var holder = ctx.Bridge.Eval(Selected + ".skillcard").AsString();
+        if (ShowsStolenCard(holder))
         {
-            if (!ctx.Bridge.Eval("{Game}.player.stolencard.name").Exists) return Strings.T("card.stolen_none");
+            if (!ctx.Bridge.Eval("{Game}.player.stolencard.name").Exists) return new List<string> { Strings.T("card.stolen_none") };
             Selected = "{Game}.player.stolencard";
             stolen = true;
         }
@@ -337,7 +548,7 @@ public sealed partial class CombatHandler : ScreenHandler
         var v = ctx.Bridge.Batch(Selected + ".name", Selected + ".x", Selected + ".y", Selected + ".width", Selected + ".height",
                                  Selected + ".ready", Selected + ".availablethisturn", Selected + ".shockedsetting",
                                  Selected + ".remainingcountdown", Selected + ".countdown", Selected + ".needstotal", Selected + ".weakened");
-        if (!v[0].Exists) return "";
+        if (!v[0].Exists) return new List<string>();
         var card = new Card(v[0].AsString(), v[1].AsDouble(), v[2].AsDouble(), v[3].AsDouble(), v[4].AsDouble(),
                             v[5].AsBool(true), v[6].AsBool(true), v[7].AsInt(), v[8].AsInt(), v[9].AsInt(), v[10].AsInt(), v[11].AsBool());
 
@@ -345,16 +556,26 @@ public sealed partial class CombatHandler : ScreenHandler
         var rect = new Rect(card.X, card.Y, card.Width, card.Height);
         var slots = CardText.Slots(ctx, Selected);
         var slotBoxes = slots.Length == 0 ? new List<Rect>() : SlotBoxes(ctx, Selected, card);
-        var face = ctx.Stage.Current.Where(p => rect.Contains(p) && !slotBoxes.Any(b => b.Contains(p))).Select(p => p.Text).ToList();
+        var hud = HudKeys(ctx);
+        var face = ctx.Stage.Current.Where(p => rect.Contains(p) && !slotBoxes.Any(b => b.Contains(p)) && !IsHud(hud, p)).Select(p => p.Text).ToList();
         var parts = new List<string>();
-        if (stolen) parts.Add(Strings.T("card.stolen"));
-        if (face.Count > 0) parts.AddRange(face);
+        if (stolen) parts.Add(Strings.T(holder == "thiefreunion" ? "card.enemy_loan" : "card.stolen"));
+        // A weakened card prints its name as "SWORD-"; "weakened" is said with its state below.
+        if (face.Count > 0) { face[0] = face[0].TrimEnd('-', ' '); parts.AddRange(face); }
         else
         {
             // Not drawn yet (cards are still sliding in) or covered: the same text, from the card itself.
             parts.Add(CardText.Name(ctx, Selected));
             var description = CardText.Description(ctx, Selected);
             if (description.Length > 0) parts.Add(description);
+        }
+
+        // A Reunion skill panel has no name of its own on its face: say what it is first.
+        if (holder.EndsWith("reunion", StringComparison.Ordinal) && holder != "thiefreunion" && parts.Count > 0)
+        {
+            var face_ = string.Join(", ", parts);
+            parts.Clear();
+            parts.Add(Strings.T("skill.panel", face_));
         }
 
         if (slots.Length > 0) parts.Add(slots);
@@ -367,12 +588,27 @@ public sealed partial class CombatHandler : ScreenHandler
         var loaded = ctx.Bridge.Dump(Selected + ".assigneddice").Select(d => d.Value.Exists).ToList();
         if (card.Ready && loaded.Count > 0 && loaded.All(f => f)) parts.Add(Strings.T("card.loaded"));
 
+        // Reunion's Thief: R keeps the borrowed card for good, once per battle.
+        if (holder == "thiefreunion" && ctx.Bridge.Eval("{Reunion}.thiefcard_created").AsBool()
+            && ctx.Bridge.Eval("{Reunion}.thiefcard_selected").AsString().Length == 0) parts.Add(Strings.T("card.enemy_loan_steal"));
+
         if (card.Shocked > 0) parts.Add(Strings.T("card.shocked"));
         if (card.Weakened) parts.Add(Strings.T("card.weakened"));
         if (!card.Available || !card.Ready) parts.Add(Strings.T("card.unavailable"));
 
-        return string.Join(brief ? ", " : ". ", parts);
+        return parts;
     }
+
+    /// <summary>
+    /// The HUD's fighter name and "3 dice" are drawn at the bottom left, inside the rectangle
+    /// of a card in a low slot (seen: the Witch's third spell slot read "Infliction, Do 3
+    /// damage, Witch, 3 dice"). They are not part of any card.
+    /// </summary>
+    private static HashSet<string> HudKeys(ScreenContext ctx)
+        => ctx.Bridge.Batch("{Game}.player.name", "{Game}.monster.name").Where(n => n.Exists)
+              .Select(n => StageCleaner.Key(ctx.Translate(n.AsString()))).ToHashSet();
+
+    private static bool IsHud(HashSet<string> names, Paragraph p) => names.Contains(p.Key) || DiceCountText().IsMatch(p.Text);
 
     /// <summary>
     /// Where the card draws its dice slots. The words printed inside one ("max 3", "even", a
@@ -407,7 +643,8 @@ public sealed partial class CombatHandler : ScreenHandler
 
     /// <summary>
     /// In the Reunion episodes the Warrior, Thief and Witch carry a skill panel (skillcard
-    /// "warriorreunion", "thiefreunion", "witchreunion") that the cursor never lands on: it is
+    /// "warriorreunion", "thiefreunion", "witchreunion") fired with Y. The Thief's is also a card the
+    /// cursor lands on (see CursorSkips). What it does is
     /// fired with Y. What it does is only drawn on it, so it is read from inside its rectangle.
     /// </summary>
     private static string DescribeSkillPanel(ScreenContext ctx)
@@ -506,16 +743,83 @@ public sealed partial class CombatHandler : ScreenHandler
             var dice = ctx.Bridge.Batch(Hover + ".basevalue", Hover + ".modifier", Hover + ".blind");
             return dice[2].AsBool() ? "" : ". " + SpellForDice(ctx, dice[0].AsInt() + dice[1].AsInt());
         }
-        if (ctx.Bridge.Eval(Selected + ".skillcard").AsString() == "stolencard" && ctx.Bridge.Eval("{Game}.player.stolencard.name").Exists)
+        if (ShowsStolenCard(ctx.Bridge.Eval(Selected + ".skillcard").AsString()) && ctx.Bridge.Eval("{Game}.player.stolencard.name").Exists)
             Selected = "{Game}.player.stolencard";
         var v = ctx.Bridge.Batch(Selected + ".x", Selected + ".y", Selected + ".width", Selected + ".height");
         if (!v[0].Exists) return "";
         var rect = new Rect(v[0].AsDouble(), v[1].AsDouble(), v[2].AsDouble(), v[3].AsDouble());
         var card = new Card("", rect.X, rect.Y, rect.Width, rect.Height, true, true, 0, 0, 0, 0, false);
         var slotBoxes = SlotBoxes(ctx, Selected, card);
-        var face = ctx.Stage.Current.Where(p => rect.Contains(p) && !slotBoxes.Any(b => b.Contains(p)))
+        var hud = HudKeys(ctx);
+        var face = ctx.Stage.Current.Where(p => rect.Contains(p) && !slotBoxes.Any(b => b.Contains(p)) && !IsHud(hud, p))
                       .Select(p => p.Text).Skip(1).ToList();   // first is the card's name
         return face.Count == 0 ? "" : ". " + string.Join(". ", face);
+    }
+
+    /// <summary>
+    /// The hovered dice and what it would do on the chosen card - or that the card will not
+    /// take it, which the game shows by not lighting the slot up. <paramref name="fits"/> is
+    /// false in that case.
+    /// </summary>
+    private static List<string> DiceParts(ScreenContext ctx, out bool fits)
+    {
+        fits = true;
+        var dice = DescribeHoverDice(ctx);
+        if (dice.Length == 0) return new List<string>();
+
+        var card = Selected;
+        if (ShowsStolenCard(ctx.Bridge.Eval(Selected + ".skillcard").AsString()) && ctx.Bridge.Eval("{Game}.player.stolencard.name").Exists)
+            card = "{Game}.player.stolencard";
+        var v = ctx.Bridge.Batch(Hover + ".basevalue", Hover + ".modifier", Hover + ".blind");
+        // A blind dice hides its number, so whether it fits must stay hidden too.
+        if (!v[2].AsBool() && !DiceFits(ctx, card, v[0].AsInt() + v[1].AsInt()))
+        {
+            fits = false;
+            return new List<string> { Strings.T("dice.unfit", dice, CardText.Name(ctx, card)) };
+        }
+        var parts = new List<string> { dice };
+        var preview = DicePreview(ctx).TrimStart('.', ' ');
+        if (preview.Length > 0) parts.Add(preview);
+        return parts;
+    }
+
+    /// <summary>
+    /// Whether any open slot of the card takes a dice of this value: Game.slotcheckvalue's
+    /// rules, from the constructor names of elements.DiceSlotType (Equipment.hx). A shocked
+    /// card takes any dice (it unlocks it); a character's panel decides for itself.
+    /// </summary>
+    private static bool DiceFits(ScreenContext ctx, string card, int value)
+    {
+        var v = ctx.Bridge.Batch(card + ".skillcard", card + ".shockedsetting");
+        if (v[0].AsString().Length > 0 || v[1].AsInt() > 0) return true;
+        var slots = ctx.Bridge.Dump(card + ".slots").Select(s => s.Value.TypeName).ToList();
+        var filled = ctx.Bridge.Dump(card + ".assigneddice").Select(d => d.Value.Exists).ToList();
+        var open = 0;
+        for (var i = 0; i < slots.Count; i++)
+        {
+            var slot = slots[i];
+            if (i < filled.Count && filled[i]) continue;
+            if (slot.Length == 0 || slot.StartsWith("FREE") || slot.StartsWith("LOCKED") || slot.StartsWith("SPARE") || slot == "SKILL") continue;
+            open++;
+            if (SlotAccepts(slot, value)) return true;
+        }
+        return slots.Count == 0 || (open == 0 && filled.Count == 0);
+    }
+
+    private static bool SlotAccepts(string slot, int value)
+    {
+        if (slot == "EVEN") return value % 2 == 0;
+        if (slot == "ODD") return value % 2 != 0;
+        if (slot.StartsWith("RANGE") && slot.Length == 7 && char.IsDigit(slot[5]) && char.IsDigit(slot[6]))
+            return value >= slot[5] - '0' && value <= slot[6] - '0';
+        if (slot.Length > 3 && char.IsDigit(slot[^1]))
+        {
+            var n = slot[^1] - '0';
+            if (slot.StartsWith("MAX")) return value <= n;
+            if (slot.StartsWith("MIN")) return value >= n;
+            if (slot.StartsWith("REQUIRE")) return value == n;
+        }
+        return true;   // NORMAL, COUNTDOWN, DOUBLES, COMBINATION and anything not known: the game decides
     }
 
     private static string DescribeHoverDice(ScreenContext ctx)
@@ -563,6 +867,13 @@ public sealed partial class CombatHandler : ScreenHandler
         }
         return parts.Count == 0 ? base.DescribeContext(ctx) : string.Join(". ", parts);
     }
+
+    public override string DescribeStatus(ScreenContext ctx, StatusKind kind) => kind switch
+    {
+        StatusKind.Dice => _narrator.DescribeDice(),
+        StatusKind.Enemies => _narrator.DescribeEnemyHealth(),
+        _ => _narrator.DescribeHealth() is { Length: > 0 } health ? health : base.DescribeStatus(ctx, kind),
+    };
 
     public override IEnumerable<string> Help => new[] { Strings.T("help.combat.play"), Strings.T("help.combat"), Strings.T("help.combat.special") }.Concat(base.Help);
 }

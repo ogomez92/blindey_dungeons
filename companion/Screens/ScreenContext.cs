@@ -56,6 +56,12 @@ public sealed class ScreenContext
         if (!string.IsNullOrWhiteSpace(text)) Speech.Say(text, interrupt);
     }
 
+    /// <summary>
+    /// Something gained focus: its details fill the item list, which becomes the current
+    /// review list, so Ctrl+Up reads about what the player is on without hunting for it.
+    /// </summary>
+    public void FocusItem(IEnumerable<string> lines) => Buffers.FocusItem(lines);
+
     /// <summary>Things that happened on their own: recorded in the events list.</summary>
     public void SayEvent(string text)
     {

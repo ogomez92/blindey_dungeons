@@ -20,8 +20,19 @@ namespace DiceyA11y.Screens;
 public sealed class BattleNarrator
 {
     private sealed record StatusInfo(string Name, int Value, string Description = "");
-    private sealed record CardInfo(string Name, bool Ready, int CountdownLeft, int Countdown, int TimesUsed, bool Available, string Detail = "", bool InHand = true);
-    private sealed record DiceInfo(int Value, bool Locked, bool Frozen, bool Burning, bool Blind, string On);
+    private sealed record CardInfo(string Name, bool Ready, int CountdownLeft, int Countdown, int TimesUsed, bool Available, string Detail = "", bool InHand = true)
+    {
+        /// <summary>The card whatever state it is in: "Sword" for both Sword and the weakened Sword.</summary>
+        public string BaseName { get; init; } = Name;
+        public bool Weakened { get; init; }
+        public bool Shocked { get; init; }
+    }
+
+    private sealed record DiceInfo(int Value, bool Locked, bool Frozen, bool Burning, bool Blind, string On, bool Consumed = false)
+    {
+        /// <summary>Still in the player's hand: not on a card and not used up (Dice.available, locked ones included).</summary>
+        public bool Free => On.Length == 0 && !Consumed;
+    }
 
     private sealed class FighterState
     {
@@ -40,6 +51,8 @@ public sealed class BattleNarrator
     private bool _started, _ended, _diceAnnounced;
     private List<string> _freeDice = new(), _pendingFreeDice = new();
     private DateTime _freeDiceChangedAt;
+    private List<string> _enemyDice = new(), _pendingEnemyDice = new();
+    private DateTime _enemyDiceChangedAt;
 
     /// <summary>Rules text of cards and statuses, for the review lists. Read once: it costs several requests.</summary>
     private readonly Dictionary<string, string> _details = new();
@@ -50,7 +63,9 @@ public sealed class BattleNarrator
         _phaseOwner = "";
         _started = _ended = _diceAnnounced = false;
         _freeDice = new(); _pendingFreeDice = new();
+        _enemyDice = new(); _pendingEnemyDice = new();
         _details.Clear();
+        _recentStatuses.Clear();
     }
 
     public void Poll(ScreenContext ctx)
@@ -62,6 +77,7 @@ public sealed class BattleNarrator
         if (player == null || enemy == null) return;
 
         RefreshBuffers(ctx, player, enemy);
+        foreach (var status in player.Statuses.Concat(enemy.Statuses)) _recentStatuses.Add(status.Name);
 
         if (!_started)
         {
@@ -109,7 +125,7 @@ public sealed class BattleNarrator
             s.Statuses.Add(new StatusInfo(StatusName(ctx, r[0].AsString()), r[1].AsInt(), description));
         }
 
-        var cards = ctx.Bridge.Pluck(f + ".equipment", "name", "ready", "remainingcountdown", "countdown", "timesused", "availablethisturn", "namemodifier", "skillcard", "ty", "show") ?? new();
+        var cards = ctx.Bridge.Pluck(f + ".equipment", "name", "ready", "remainingcountdown", "countdown", "timesused", "availablethisturn", "namemodifier", "skillcard", "ty", "show", "shockedsetting") ?? new();
         for (var i = 0; i < cards.Count; i++)
         {
             var r = cards[i];
@@ -130,13 +146,18 @@ public sealed class BattleNarrator
             // With a deck, Fighter.equipment also keeps the cards already played or discarded this
             // turn, parked off screen (observed: ty far above or below the 2160-high canvas).
             var inHand = !s.DeckStyle || (r[1].AsBool(true) && r[9].AsBool(true) && r[8].AsDouble() > -200 && r[8].AsDouble() < 2100);
-            s.Cards.Add(new CardInfo(name, r[1].AsBool(true), r[2].AsInt(), r[3].AsInt(), r[4].AsInt(), r[5].AsBool(true), detail, inHand));
+            s.Cards.Add(new CardInfo(name, r[1].AsBool(true), r[2].AsInt(), r[3].AsInt(), r[4].AsInt(), r[5].AsBool(true), detail, inHand)
+            {
+                BaseName = r[7].AsString().Length > 0 ? name : CardText.DecorateName(ctx, r[0].AsString(), r[6].AsString().Replace("-", "")),
+                Weakened = r[6].AsString().Contains('-'),
+                Shocked = r[10].AsInt() > 0,
+            });
         }
 
-        foreach (var r in ctx.Bridge.Pluck(f + ".dicepool", "basevalue", "modifier", "locked", "frozen", "burn", "blind", "assigned.name") ?? new())
+        foreach (var r in ctx.Bridge.Pluck(f + ".dicepool", "basevalue", "modifier", "locked", "frozen", "burn", "blind", "assigned.name", "consumed") ?? new())
             if (r[0].Exists)
                 s.Dice.Add(new DiceInfo(r[0].AsInt() + r[1].AsInt(), r[2].AsBool(), r[3].AsBool(), r[4].AsBool(), r[5].AsBool(),
-                                        r[6].Exists ? ctx.Translate(r[6].AsString()) : ""));
+                                        r[6].Exists ? ctx.Translate(r[6].AsString()) : "", r[7].AsBool()));
         return s;
     }
 
@@ -178,6 +199,7 @@ public sealed class BattleNarrator
         {
             _phaseOwner = owner;
             _diceAnnounced = false;
+            _enemyDice = new(); _pendingEnemyDice = new();
             ctx.SayEvent(owner == "player" ? Strings.T("battle.your_turn") : Strings.T("battle.enemy_turn", enemy.Name));
         }
 
@@ -190,9 +212,29 @@ public sealed class BattleNarrator
                 ctx.SayEvent(Strings.T("dice.list", string.Join(", ", _freeDice)));
         }
         else if (_phaseOwner == "player" && _diceAnnounced) AnnounceNewDice(ctx, player);
+        else if (_phaseOwner == "enemy") AnnounceEnemyDice(ctx, enemy);
     }
 
-    private static List<string> FreeDice(FighterState f) => f.Dice.Where(d => d.On.Length == 0).Select(Describe).ToList();
+    private static List<string> FreeDice(FighterState f) => f.Dice.Where(d => d.Free).Select(Describe).ToList();
+
+    /// <summary>
+    /// What the enemy rolled, which a sighted player watches land before the cards are played.
+    /// Every dice in its pool counts, spent or not (the roll is the news, and by the time the
+    /// pool has settled the first dice may already sit on a card); dice made later in the turn
+    /// are announced the same way.
+    /// </summary>
+    private void AnnounceEnemyDice(ScreenContext ctx, FighterState enemy)
+    {
+        var dice = enemy.Dice.Select(Describe).ToList();
+        if (!dice.SequenceEqual(_pendingEnemyDice)) { _pendingEnemyDice = dice; _enemyDiceChangedAt = DateTime.UtcNow; return; }
+        if (dice.SequenceEqual(_enemyDice) || DateTime.UtcNow - _enemyDiceChangedAt < TimeSpan.FromMilliseconds(350)) return;
+
+        var left = new List<string>(_enemyDice);
+        var added = dice.Where(d => !left.Remove(d)).ToList();
+        _enemyDice = dice;
+        if (added.Count > 0 && ctx.Config.AnnounceDice)
+            ctx.SayEvent(Strings.T("dice.enemy", enemy.Name, string.Join(", ", added)));
+    }
 
     /// <summary>
     /// Cards that split, reroll, bump or duplicate a dice change what the player holds. A
@@ -265,8 +307,21 @@ public sealed class BattleNarrator
             return;
         }
 
-        var gained = after.Cards.Select(c => c.Name).Except(before.Cards.Select(c => c.Name)).ToList();
-        var lost = before.Cards.Select(c => c.Name).Except(after.Cards.Select(c => c.Name)).ToList();
+        // A status that moves from the fighter onto the cards (shock, weaken) is one event per
+        // card - "Sword weakened" - not the unweakened card lost and a weakened one gained.
+        var wasCards = before.Cards.ToList();
+        foreach (var card in after.Cards)
+        {
+            var was = wasCards.FirstOrDefault(c => c.BaseName == card.BaseName);
+            if (was == null) continue;
+            wasCards.Remove(was);
+            if (card.Shocked && !was.Shocked) ctx.SayEvent(Strings.T("battle.card_shocked", who, card.BaseName));
+            if (card.Weakened && !was.Weakened) ctx.SayEvent(Strings.T("battle.card_weakened", who, card.BaseName));
+            if (!card.Weakened && was.Weakened) ctx.SayEvent(Strings.T("battle.card_restored", who, card.BaseName));
+        }
+
+        var gained = after.Cards.Select(c => c.BaseName).Except(before.Cards.Select(c => c.BaseName)).ToList();
+        var lost = before.Cards.Select(c => c.BaseName).Except(after.Cards.Select(c => c.BaseName)).ToList();
         // The Thief's stolen card is a different enemy card every turn, not a card won and lost.
         var stolenPrefix = Strings.T("card.stolen");
         var stolen = gained.FirstOrDefault(n => n.StartsWith(stolenPrefix, StringComparison.Ordinal));
@@ -282,7 +337,13 @@ public sealed class BattleNarrator
     {
         for (var i = 0; i < after.Cards.Count && i < before.Cards.Count; i++)
             if (after.Cards[i].Name == before.Cards[i].Name && after.Cards[i].TimesUsed > before.Cards[i].TimesUsed)
-                ctx.SayEvent(Strings.T("battle.enemy_uses", after.Name, after.Cards[i].Name));
+            {
+                // The dice it was played with, when the game still has them on the card.
+                var card = after.Cards[i].Name;
+                var dice = after.Dice.Concat(before.Dice.Where(d => !after.Dice.Contains(d))).Where(d => d.On == card && !d.Blind).Select(d => d.Value.ToString()).Distinct().ToList();
+                ctx.SayEvent(dice.Count > 0 ? Strings.T("battle.enemy_uses_dice", after.Name, card, string.Join(", ", dice))
+                                            : Strings.T("battle.enemy_uses", after.Name, card));
+            }
     }
 
     private void AnnounceEnd(ScreenContext ctx, FighterState player, FighterState enemy)
@@ -321,7 +382,15 @@ public sealed class BattleNarrator
     {
         ctx.Buffers.Get(BufferManager.YourCards).Set(player.Cards.Where(c => c.InHand).Select(DescribeFully));
         ctx.Buffers.Get(BufferManager.EnemyCards).Set(enemy.Cards.Select(DescribeFully));
-        ctx.Buffers.Get(BufferManager.Dice).Set(player.Dice.Select(d => Describe(d) + (d.On.Length > 0 ? ", " + d.On : "")));
+        // Only what can still be played: a dice on a card or used up is no longer the player's to place.
+        ctx.Buffers.Get(BufferManager.Dice).Set(player.Dice.Where(d => d.Free).Select(Describe));
+        var you = new List<string> { player.Name, Health(player) };
+        if (player.LimitMax > 0) you.Add(Strings.T("battle.limit", player.Limit, player.LimitMax));
+        if (player.CpuTarget > 0) you.Add(Strings.T("robot.cpu", player.CpuTotal, player.CpuTarget));
+        you.AddRange(player.Statuses.Select(DescribeFully));
+        you.Add(Strings.T("map.level", player.Level));
+        you.Add(Strings.T("icon.gold", player.Gold));
+        ctx.Buffers.Get(BufferManager.Player).Set(you);
         ctx.Buffers.Get(BufferManager.Statuses).Set(
             player.Statuses.Select(s => Strings.T("battle.you") + ": " + DescribeFully(s))
                   .Concat(enemy.Statuses.Select(s => enemy.Name + ": " + DescribeFully(s))));
@@ -332,6 +401,28 @@ public sealed class BattleNarrator
 
     /// <summary>Names as drawn in the battle HUD, which the narrator already covers.</summary>
     public IEnumerable<string> FighterNames => new[] { _player?.Name, _enemy?.Name }.Where(n => !string.IsNullOrEmpty(n))!;
+
+    /// <summary>Status names as the game floats them over a fighter ("Burn 1"); the narrator has already said them.</summary>
+    public bool IsStatusLabel(string text)
+    {
+        return _recentStatuses.Any(n => text.StartsWith(n, StringComparison.OrdinalIgnoreCase) && text[n.Length..].Trim().All(char.IsDigit));
+    }
+
+    private readonly HashSet<string> _recentStatuses = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Ctrl+D.</summary>
+    public string DescribeDice()
+    {
+        if (_player == null) return Strings.T("status.battle_only");
+        var free = FreeDice(_player);
+        return free.Count == 0 ? Strings.T("dice.none") : Strings.T("dice.list", string.Join(", ", free));
+    }
+
+    /// <summary>Ctrl+H.</summary>
+    public string DescribeHealth() => _player == null ? "" : Health(_player);
+
+    /// <summary>Ctrl+E. The game only ever has one enemy at a time.</summary>
+    public string DescribeEnemyHealth() => _enemy == null ? Strings.T("status.battle_only") : _enemy.Name + ", " + Health(_enemy);
 
     public string DescribeBoth()
     {

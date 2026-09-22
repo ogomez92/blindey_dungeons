@@ -15,7 +15,7 @@ namespace DiceyA11y.Screens;
 /// </summary>
 public sealed class ScreenMonitor : IDisposable
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(60);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(35);
 
     private const string Nav = "{ButtonGamepadNavigation}";
     private const string CurrentScene = "{haxegon.Scene}.scenelist[{haxegon.Scene}.currentscene]";
@@ -45,7 +45,7 @@ public sealed class ScreenMonitor : IDisposable
             Bridge = bridge, Speech = speech, Buffers = buffers, Config = config, Log = log,
             Stage = new StageWatcher(TimeSpan.FromMilliseconds(320)),
         };
-        _handlers = new List<ScreenHandler> { new DungeonHandler(pad), new CombatHandler(), new LevelUpHandler(), new BackpackHandler(), new PickupHandler(), new ShopHandler(), new BlacksmithHandler(), new BarterHandler(), new CharacterSelectHandler(), new ProgressEditorHandler(), new ModsHandler(), new SpellbookHandler(), new DeckHandler(), new ChallengeHandler(), new FinaleSelectHandler(), new RemixHandler(), new InventoryFullHandler() };
+        _handlers = new List<ScreenHandler> { new DungeonHandler(pad), new CombatHandler(pad), new LevelUpHandler(), new BackpackHandler(), new PickupHandler(), new ShopHandler(), new BlacksmithHandler(), new BarterHandler(), new CharacterSelectHandler(), new ProgressEditorHandler(), new ModsHandler(), new SpellbookHandler(), new DeckHandler(), new ChallengeHandler(), new FinaleSelectHandler(), new RemixHandler(), new InventoryFullHandler() };
         _active = _fallback;
     }
 
@@ -94,7 +94,12 @@ public sealed class ScreenMonitor : IDisposable
                     lock (_gate) { _ctx.State = new GameState(); _ctx.ForgetTranslations(); _language = ""; }
                 }
 
-                lock (_gate) Poll();
+                // One scope per poll: the reads the last poll made are sent together, one frame.
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                var sentBefore = _bridge.Sent;
+                lock (_gate) { using (_bridge.OpenScope("poll:" + _ctx.State.Scene)) Poll(); }
+                if (clock.ElapsedMilliseconds > 250 && _bridge.Sent - sentBefore > 5)   // few requests and slow: the game is loading, not the mod lagging
+                    _log($"Slow poll: {clock.ElapsedMilliseconds} ms, {_bridge.Sent - sentBefore} requests, {_ctx.State.Scene}. Not sent ahead: {string.Join(" ; ", _bridge.Missed)}");
             }
             catch (Exception ex)
             {
@@ -213,7 +218,7 @@ public sealed class ScreenMonitor : IDisposable
     /// <summary>
     /// What a sighted player gets by hovering: displayobjects.TooltipManager.tooltips is a map
     /// of every tooltip the current screen registered (limit break, status icons, map prompts),
-    /// each with its lines already translated. They go into a review list of their own.
+    /// each with its lines already translated. They go on top of the focused item's review list.
     /// </summary>
     private void RefreshTooltips()
     {
@@ -221,14 +226,17 @@ public sealed class ScreenMonitor : IDisposable
         _tooltipsReadAt = DateTime.UtcNow;
         const string Map = "{displayobjects.TooltipManager}.tooltips";
         var lines = new List<string>();
-        foreach (var key in _bridge.Request("iter", Map + ".keys()").Split(BridgeClient.UnitSeparator).Select(k => new GameValue(k)).Where(k => k.Kind == GameValueKind.String))
+        var keys = _bridge.Request("iter", Map + ".keys()").Split(BridgeClient.UnitSeparator).Select(k => new GameValue(k)).Where(k => k.Kind == GameValueKind.String).ToList();
+        _bridge.Warm(keys.SelectMany(k => new[] { ("eval", Map + ".get(" + GameValue.Quote(k.AsString()) + ").canshow"),
+                                                  ("dump", Map + ".get(" + GameValue.Quote(k.AsString()) + ").translatedtext") }));
+        foreach (var key in keys)
         {
             var tip = Map + ".get(" + GameValue.Quote(key.AsString()) + ")";
             if (!_bridge.Eval(tip + ".canshow").AsBool(true)) continue;
             var text = string.Join(". ", _bridge.Dump(tip + ".translatedtext").Select(l => StageCleaner.Clean(l.Value.AsString())).Where(l => l.Length > 0));
             if (text.Length > 0 && !lines.Contains(text)) lines.Add(text);
         }
-        _ctx.Buffers.Get(BufferManager.Tooltips).Set(lines);
+        _ctx.Buffers.SetTooltips(lines);
     }
 
     /// <summary>
@@ -266,13 +274,16 @@ public sealed class ScreenMonitor : IDisposable
         if (!_bridge.Connected) return false;
         lock (_gate)
         {
-            try { return _active.OnKey(_ctx, key); }
+            // Space is Enter's twin everywhere but the map, where it recentres the map cursor.
+            if (key == NavKey.Snap && _active is not DungeonHandler) key = NavKey.Confirm;
+            try { using (_bridge.OpenScope()) return _active.OnKey(_ctx, key); }
             catch (Exception ex) { _log("Key handling failed: " + ex.Message); return false; }
         }
     }
 
     public string DescribeFocus() { lock (_gate) return Guarded(() => _active.DescribeFocus(_ctx)); }
     public string DescribeScreen() { lock (_gate) return Guarded(() => _active.DescribeScreen(_ctx)); }
+    public string DescribeStatus(StatusKind kind) { lock (_gate) return Guarded(() => _active.DescribeStatus(_ctx, kind)); }
     public string DescribeContext() { lock (_gate) return Guarded(() => _active.DescribeContext(_ctx)); }
     public IEnumerable<string> Help() { lock (_gate) return _active.Help.ToList(); }
 
@@ -285,7 +296,7 @@ public sealed class ScreenMonitor : IDisposable
     private string Guarded(Func<string> read)
     {
         if (!_bridge.Connected) return Strings.T("mod.waiting");
-        try { return read(); }
+        try { using (_bridge.OpenScope()) return read(); }
         catch (Exception ex) { _log("Read failed: " + ex.Message); return Strings.T("nothing.text"); }
     }
 
