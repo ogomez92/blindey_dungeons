@@ -47,7 +47,8 @@ public static class CardText
         return text;
     }
 
-    public static string Description(ScreenContext ctx, string card)
+    /// <summary>The rules lines as the game holds them, markup included ("Do [fire]3 damage"): what the keyword lookup reads.</summary>
+    public static List<string> RawDescriptionLines(ScreenContext ctx, string card)
     {
         // What the card's own panel last drew is the most faithful: it includes what an upgrade
         // adds ("+ 1", worked out at draw time - fulldescription never changes) and any text
@@ -56,11 +57,17 @@ public static class CardText
         var count = ctx.Bridge.Eval(panel + ".length").AsInt();
         var lines = count > 0
             ? ctx.Bridge.Batch(Enumerable.Range(0, count).Select(i => $"{panel}[{i}].textfield._text").ToList())
-                 .Select(l => StageCleaner.Clean(l.AsString())).Where(l => l.Length > 0).ToList()
+                 .Where(l => l.Exists).Select(l => l.AsString()).Where(l => l.Trim().Length > 0).ToList()
             : new List<string>();
         if (lines.Count == 0)
             lines = ctx.Bridge.Dump("{MyLocale}.translatearray(" + card + ".fulldescription)")
-                       .Select(l => StageCleaner.Clean(l.Value.AsString())).Where(l => l.Length > 0).ToList();
+                       .Where(l => l.Value.Exists).Select(l => l.Value.AsString()).Where(l => l.Trim().Length > 0).ToList();
+        return lines;
+    }
+
+    public static string Description(ScreenContext ctx, string card)
+    {
+        var lines = RawDescriptionLines(ctx, card).Select(StageCleaner.Clean).Where(l => l.Length > 0);
         // A line break is either the end of an effect or just where the card wraps a sentence.
         var text = "";
         foreach (var line in lines)
@@ -70,6 +77,9 @@ public static class CardText
         }
         return text;
     }
+
+    /// <summary>"Burn: Sets the next dice on fire..." for every status effect the card's text names by its icon.</summary>
+    public static List<string> Keywords(ScreenContext ctx, string card) => StatusKeywords.Lines(ctx, RawDescriptionLines(ctx, card));
 
     /// <summary>Rules text of a card known only by its internal name (a page of the Witch's book).</summary>
     public static string DescriptionByName(ScreenContext ctx, string name)

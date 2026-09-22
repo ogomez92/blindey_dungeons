@@ -227,6 +227,10 @@ public sealed class ScreenMonitor : IDisposable
     {
         if (DateTime.UtcNow - _tooltipsReadAt < TimeSpan.FromSeconds(1.5)) return;
         _tooltipsReadAt = DateTime.UtcNow;
+        // In battle the tooltips are the limit break's and the status icons', which the Tab
+        // groups cover; on top of every focused card they read as "the Fury tooltip on a
+        // random card".
+        if (_active is CombatHandler) { _ctx.Buffers.SetTooltips(Array.Empty<string>()); return; }
         const string Map = "{displayobjects.TooltipManager}.tooltips";
         var lines = new List<string>();
         var keys = _bridge.Request("iter", Map + ".keys()").Split(BridgeClient.UnitSeparator).Select(k => new GameValue(k)).Where(k => k.Kind == GameValueKind.String).ToList();

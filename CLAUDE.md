@@ -138,10 +138,17 @@ applies. The keyboard hook swallows them, so nothing acts twice. Default map: ar
 d-pad, Enter/Space = A, Escape = B, E = X, R = Y, Q/W = shoulders, F11 = Start,
 Backspace = Back. Space is A everywhere but
 the map (there it recentres the map cursor); comma, period and P exist only for the map and
-never reach the pad. Tab / Shift+Tab are the mod's own (`NavKey.EnemyNext/EnemyPrevious`):
-in battle they read the enemy's cards one at a time from the card objects. (Tab used to hold
-the right stick up, which is the game's on-screen preview: every card was read in one go, and
-the release handler slept 1.6 s on the key-action queue, so the next arrow waited behind it.)
+never reach the pad. Tab / Shift+Tab and Page Down / Page Up are the mod's own
+(`NavKey.GroupNext/GroupPrevious/ItemNext/ItemPrevious`, `CombatGroups.cs`): in battle Tab
+moves between four groups (enemy cards, enemy statuses, your statuses, your actions) and the
+page keys within one; every item fills the item review list with its details plus keyword
+lines (`StatusKeywords`: the status effects behind the icons in the card's raw text, from
+`data/text/statuseffects.csv`, translated by the game). Enemy cards are read from the card
+objects, never the stage (off the preview they are parked over the player's cards). In battle
+the tooltips are no longer put on the item list: the limit break's tooltip read as if it
+belonged to whatever card was focused. (Tab used to hold the right stick up, the game's
+on-screen preview: every card was read in one go, and the release handler slept 1.6 s on the
+key-action queue, so the next arrow waited behind it.)
 Left Control stops speech through `HotkeyHook.BindObserved`: the hook runs the action and
 passes the key on, so it is still the Control of Ctrl+D and Alt+Tab.
 Ctrl+D / Ctrl+H / Ctrl+E read dice, health and enemy health. The title's own

@@ -92,7 +92,8 @@ Active only while the Dicey Dungeons window has focus.
 | **Q**, **W** | Shoulder buttons |
 | **F11** | Pause menu (Start): continue, options, mods |
 | **Backspace** | Back/Select button |
-| **Tab**, **Shift+Tab** | In battle: the enemy's cards one at a time, forwards and back |
+| **Tab**, **Shift+Tab** | In battle: next / previous group: enemy cards, enemy status effects, your status effects, your actions |
+| **Page Down**, **Page Up** | In battle: next / previous item of the current group |
 | **Left Control** | Stops speech |
 
 When the game shows a gamepad button in a prompt, the mod says the key instead
@@ -105,8 +106,16 @@ Enter picks the card; now the arrows move between your dice, and each is read wi
 the card would do with it ("dice 5. Does 5 damage"). Enter plays it, Escape backs out.
 **E** ends your turn. Damage, healing, status effects, what the enemy plays and whose turn
 it is are spoken as they happen. A status effect is explained the first time it appears in a
-fight ("Frog shield 3. Blocks the opponent's damage"). **Tab** reads the enemy's cards one at
-a time, **Shift+Tab** goes back.
+fight ("Frog shield 3. Blocks the opponent's damage").
+
+Everything else on the board is in four groups. **Tab** and **Shift+Tab** move between them:
+the enemy's cards, the enemy's status effects, your status effects, and your actions (the
+limit break with its charge, a Reunion skill, the Jester's discard, fleeing). **Page Down**
+and **Page Up** move within the group; each item is read with its place ("2 of 3"). The item
+also becomes the current review list, so **Ctrl+Up** reads its details line by line, ending
+with the keywords its text names: a card that says "Do 3 burn damage" gets a "Burn: ..." line
+with the game's own rule for it. The same keyword lines follow your own cards as the arrows
+move over them.
 
 - **W** uses your limit break once the mod says it is ready (Enter activates, Escape cancels).
 - **Backspace** asks to flee the fight.

@@ -84,7 +84,7 @@ public sealed partial class CombatHandler : ScreenHandler
         _paused = false;
         _pauseLabels.Clear();
         _pauseClosedAt = DateTime.MinValue;
-        _enemyCard = -1;
+        ResetGroups();
         _phase = "";
         _spokenThisBattle.Clear();
         _narrator.Reset();
@@ -173,7 +173,8 @@ public sealed partial class CombatHandler : ScreenHandler
         if (text.Length > 0 && !repeat) ctx.Say(text, interrupt: fromKey);
         _focusSaid = text;
         _focusSaidAt = DateTime.UtcNow;
-        ctx.FocusItem(lines);
+        // The card's details, then the rules behind the status icons in its text.
+        ctx.FocusItem(diceMode ? lines : lines.Concat(CardText.Keywords(ctx, Selected)));
     }
 
     /// <summary>
@@ -204,31 +205,8 @@ public sealed partial class CombatHandler : ScreenHandler
         if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right or NavKey.Confirm or NavKey.Back) { _navKeyAt = DateTime.UtcNow; _navKey = key; }
         if (key == NavKey.X && ctx.State.Focus == null && !_limitPrompt && !_fleePrompt) _quietUntil = DateTime.UtcNow.AddSeconds(2.5);
         if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right && MoveCardCursor(ctx, key is NavKey.Left or NavKey.Up ? -1 : 1)) return true;
-        if (key is NavKey.EnemyNext or NavKey.EnemyPrevious) { BrowseEnemyCards(ctx, key == NavKey.EnemyNext ? 1 : -1); return true; }
+        if (OnGroupKey(ctx, key)) return true;   // Tab / Shift+Tab / Page Down / Page Up: CombatGroups.cs
         return base.OnKey(ctx, key);
-    }
-
-    private int _enemyCard = -1;
-
-    /// <summary>
-    /// Tab: the enemy's cards one at a time, with their place in the list; Shift+Tab goes back.
-    /// Read from the card objects, never from the stage: off the preview the enemy's cards
-    /// are parked over the player's, and the text inside their rectangles is the player's.
-    /// </summary>
-    private void BrowseEnemyCards(ScreenContext ctx, int step)
-    {
-        var rows = ctx.Bridge.Pluck("{Game}.monster.equipment", "name", "ready", "availablethisturn", "remainingcountdown", "countdown", "namemodifier") ?? new();
-        var cards = rows.Select((r, i) => (Row: r, Index: i)).Where(c => c.Row[0].Exists).ToList();
-        if (cards.Count == 0) { ctx.Say(Strings.T("cards.enemy_none"), interrupt: true); return; }
-        _enemyCard = _enemyCard < 0 ? (step > 0 ? 0 : cards.Count - 1) : (_enemyCard + step + cards.Count) % cards.Count;
-        var (row, index) = cards[_enemyCard];
-        var card = $"{{Game}}.monster.equipment[{index}]";
-        var parts = new List<string> { CardText.Full(ctx, card) };
-        if (row[4].AsInt() > 0) parts.Add(row[3].AsInt() > 0 ? Strings.T("slot.COUNTDOWN", row[3].AsInt()) : Strings.T("card.ready"));
-        if (!row[1].AsBool(true) || !row[2].AsBool(true)) parts.Add(Strings.T("card.unavailable"));
-        var text = TextCleanup.JoinSentences(parts.ToArray()) + ", " + Strings.T("of", _enemyCard + 1, cards.Count);
-        ctx.Say(_enemyCard == 0 && step > 0 ? Strings.T("cards.enemy_one", text) : text, interrupt: true);
-        ctx.FocusItem(parts);
     }
 
     /// <summary>

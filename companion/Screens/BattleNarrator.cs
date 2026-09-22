@@ -19,7 +19,15 @@ namespace DiceyA11y.Screens;
 /// </summary>
 public sealed class BattleNarrator
 {
-    private sealed record StatusInfo(string Name, int Value, string Description = "");
+    public sealed record StatusInfo(string Name, int Value, string Description = "");
+
+    /// <summary>The fighters' statuses as of the last poll, for the Tab groups.</summary>
+    public IReadOnlyList<StatusInfo> PlayerStatuses => _player?.Statuses ?? new List<StatusInfo>();
+    public IReadOnlyList<StatusInfo> EnemyStatuses => _enemy?.Statuses ?? new List<StatusInfo>();
+    public bool PlayerHasDeck => _player?.DeckStyle ?? false;
+
+    /// <summary>"Shield 3" / "Shield 3. Blocks incoming damage" for one status.</summary>
+    public static string DescribeStatus(StatusInfo s, bool withRule) => withRule ? DescribeFully(s) : Describe(s);
     private sealed record CardInfo(string Name, bool Ready, int CountdownLeft, int Countdown, int TimesUsed, bool Available, string Detail = "", bool InHand = true)
     {
         /// <summary>The card whatever state it is in: "Sword" for both Sword and the weakened Sword.</summary>
@@ -191,6 +199,7 @@ public sealed class BattleNarrator
         ctx.SayEvent(Strings.T("battle.start", enemy.Name, Health(enemy), Health(player)));
         if (ctx.Config.AnnounceEnemyEquipment && enemy.Cards.Count > 0)
             ctx.SayEvent(Strings.T("battle.enemy_cards", enemy.Name, string.Join(", ", enemy.Cards.Select(c => c.Name))));
+        ctx.SayEvent(Strings.T("battle.groups_hint"));
         foreach (var (f, who) in new[] { (player, Strings.T("battle.you")), (enemy, enemy.Name) })
             if (f.Statuses.Count > 0) ctx.SayEvent(who + " " + string.Join(", ", f.Statuses.Select(Describe)));
     }

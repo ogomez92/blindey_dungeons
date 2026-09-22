@@ -329,12 +329,15 @@ public static class Program
         Map(Keys.Period, PadButton.A, NavKey.NextItem);
         Map(Keys.Letter('P'), PadButton.A, NavKey.Path);
 
-        // Tab reads the enemy's cards one at a time (Shift+Tab backwards). It used to hold
-        // the right stick up, which shows them on screen: every card was read in one go and
-        // could not be browsed, and the release handler slept on the key queue, so the next
-        // arrow waited behind it.
-        Map(Keys.Tab, PadButton.A, NavKey.EnemyNext);
-        _hotkeys.BindHeld(Keys.Tab, () => NavDown(NavKey.EnemyPrevious), () => NavUp(NavKey.EnemyPrevious), shift: true);
+        // In battle Tab / Shift+Tab move between groups (the enemy's cards, the status effects,
+        // your actions) and Page Down / Page Up between the items of a group. Tab used to hold
+        // the right stick up, which shows the enemy's cards on screen: every card was read in
+        // one go and could not be browsed, and the release handler slept on the key queue, so
+        // the next arrow waited behind it.
+        Map(Keys.Tab, PadButton.A, NavKey.GroupNext);
+        _hotkeys.BindHeld(Keys.Tab, () => NavDown(NavKey.GroupPrevious), () => NavUp(NavKey.GroupPrevious), shift: true);
+        Map(Keys.PageDown, PadButton.A, NavKey.ItemNext);
+        Map(Keys.PageUp, PadButton.A, NavKey.ItemPrevious);
 
         // Left Control silences speech, as it does in the screen reader itself; the key still
         // reaches the game and still works as the Control of the review shortcuts.
@@ -382,9 +385,9 @@ public static class Program
         }
         if (line == "peek")
         {
-            NavDown(NavKey.EnemyNext);
+            NavDown(NavKey.GroupNext);
             Thread.Sleep(60);
-            NavUp(NavKey.EnemyNext);
+            NavUp(NavKey.GroupNext);
             return "ok";
         }
         if (line == "stop") { _speech.StopSpeech(); return "ok"; }
