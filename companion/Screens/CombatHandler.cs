@@ -261,9 +261,10 @@ public sealed partial class CombatHandler : ScreenHandler
         // own cursor state all follow (writing the static alone moved the cursor in silence,
         // which the player noticed at once). Within a column that is Up or Down. Across columns
         // it is Left or Right, and gamepad_preferredrow = the card's displayrow says which of
-        // two stacked cards the game lands on (verified: Left from a tall card onto the lower
-        // of two, the Witch's lower slots). OnPoll checks where the cursor ended up
-        // (AwaitingListMove).
+        // two stacked cards the game lands on when the cursor leaves a tall card (verified: Left
+        // from a tall card onto the lower of two, the Witch's lower slots); leaving a small card
+        // the game keeps that card's row, and OnPoll adds the vertical press (AwaitingListMove),
+        // which also checks where the cursor ended up.
         var (from, target) = (cards[at], cards[to]);
         var sameColumn = Math.Abs(from.X - target.X) < 1;
         var button = sameColumn ? (target.Y > from.Y ? PadButton.Down : PadButton.Up) : (target.X > from.X ? PadButton.Right : PadButton.Left);
@@ -317,7 +318,7 @@ public sealed partial class CombatHandler : ScreenHandler
     /// <summary>"2 of 5": tells two copies of a card apart and says when the list has ended.</summary>
     private static string ListPosition(int count, int at) => at >= 0 && count > 1 ? Strings.T("of", at + 1, count) : "";
 
-    private sealed record WantedCard(int Index, string Name, double X, double Y, DateTime At, PadButton Button, int PreferredRow, int Attempt = 1);
+    private sealed record WantedCard(int Index, string Name, double X, double Y, DateTime At, PadButton Button, int PreferredRow, int Attempt = 1, bool Stepped = false);
 
     private WantedCard? _wanted;
 
@@ -335,6 +336,18 @@ public sealed partial class CombatHandler : ScreenHandler
     {
         if (_wanted is not { } want) return false;
         if (name.AsString() == want.Name && Math.Abs(tx.AsDouble() - want.X) < 1 && Math.Abs(ty.AsDouble() - want.Y) < 1) { _wanted = null; return false; }
+        // Across columns the game picks the row itself: the one written to gamepad_preferredrow
+        // when the cursor leaves a tall card, but a small card's own row whatever was written
+        // (the game puts the small card's row back every frame - seen 2026-09-22, Thief with
+        // Pea Shooter over Poison Needle: Right from Lockpick always landed on Poison Needle,
+        // and the charm above it was dropped from the list as refused). Landed in the wanted
+        // column but on its other card: one vertical press finishes the move.
+        if (want.Button is PadButton.Left or PadButton.Right && !want.Stepped && name.Exists && Math.Abs(tx.AsDouble() - want.X) < 1)
+        {
+            _wanted = want with { At = DateTime.UtcNow, Button = ty.AsDouble() < want.Y ? PadButton.Down : PadButton.Up, PreferredRow = -1, Attempt = 1, Stepped = true };
+            Press(ctx, _wanted);
+            return true;
+        }
         if (DateTime.UtcNow - want.At < TimeSpan.FromMilliseconds(want.Attempt == 1 ? 300 : 400)) return true;
         if (want.Attempt == 1)
         {

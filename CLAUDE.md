@@ -272,7 +272,12 @@ Right/Down = next, no wrap, the ends repeat the card, and every card is spoken w
 position ("2 of 5": tells twins apart, marks the end). The move is made by **the game's own
 d-pad**: one press of the button that leads to the wanted card (Up/Down inside a column;
 Left/Right across, after writing `gamepad_preferredrow` = the card's `displayrow`, which is
-what picks between two stacked cards - verified), so the game's click and highlight follow.
+what picks between two stacked cards when the cursor leaves a TALL card - verified; leaving a
+small card the game puts that card's own row back every frame, whatever was written, and lands
+on the same row of the next column, so `AwaitingListMove` adds one Up/Down press when the
+cursor arrives in the wanted column on the other card - third play-test, the Thief's Snake Eye
+Charm under Poison Needle was "refused" that way and dropped from the list every turn), so the
+game's click and highlight follow.
 A first version only wrote `gamepad_selectedequipment`: it worked but was silent, and the
 player missed the click at once. There is no such write any more: the game undoes it every
 frame for a card it refuses. `AwaitingListMove` gives the cursor 300 ms to arrive; if it does
@@ -295,8 +300,10 @@ Card name and
 text are read off the stage from inside the card's rectangle (localized, live values);
 dice slots are pictures and come from `Equipment.slots` (`elements.DiceSlotType`).
 Narration diffs `Game.player` / `Game.monster` each poll. A blind dice is never read out.
-Also narrated: what the enemy rolled (`monsterturn:*`, once its pool settles) and the dice
-each of its cards was played with; a status moving from the fighter onto cards as one event
+Also narrated: what the enemy rolled (`monsterturn:*`, once its pool settles), the dice
+each of its cards was played with, and each dice it puts on a countdown card ("puts 3 on
+Spiky Potion, 3 left" / ": ready"; the number left is `remainingcountdown - reducecountdownby`,
+because the card ticks down one step every 0.12 s after the dice is spent); a status moving from the fighter onto cards as one event
 per card ("Sword shocked", "Sword weakened": cards are matched by name without the "-"
 modifier, so no lost/gained pair); a dice that fits no open slot of the chosen card is
 "not available for <card>" (`DiceFits`, the rules of `Game.slotcheckvalue`). After E the

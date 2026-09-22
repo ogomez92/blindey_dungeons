@@ -137,11 +137,15 @@ public sealed class BattleNarrator
             s.Statuses.Add(new StatusInfo(StatusName(ctx, r[0].AsString()), r[1].AsInt(), description));
         }
 
-        var cards = ctx.Bridge.Pluck(f + ".equipment", "name", "ready", "remainingcountdown", "countdown", "timesused", "availablethisturn", "namemodifier", "skillcard", "ty", "show", "shockedsetting") ?? new();
+        var cards = ctx.Bridge.Pluck(f + ".equipment", "name", "ready", "remainingcountdown", "countdown", "timesused", "availablethisturn", "namemodifier", "skillcard", "ty", "show", "shockedsetting", "reducecountdownby") ?? new();
         for (var i = 0; i < cards.Count; i++)
         {
             var r = cards[i];
             if (!r[0].Exists) continue;
+            // A dice on a countdown slot is spent at once, but the number on the card ticks down
+            // one step every 0.12 s (Equipment.reducecountdownby): what is left is the number
+            // less what is still to tick, or every step would be an event of its own.
+            var countdownLeft = Math.Max(0, r[2].AsInt() - r[11].AsInt());
             var card = $"{f}.equipment[{i}]";
             var name = CardText.DecorateName(ctx, r[0].AsString(), r[6].AsString());
             if (r[7].AsString() == "switchfighter") name = Strings.T("panel.switch");
@@ -158,7 +162,7 @@ public sealed class BattleNarrator
             // With a deck, Fighter.equipment also keeps the cards already played or discarded this
             // turn, parked off screen (observed: ty far above or below the 2160-high canvas).
             var inHand = !s.DeckStyle || (r[1].AsBool(true) && r[9].AsBool(true) && r[8].AsDouble() > -200 && r[8].AsDouble() < 2100);
-            s.Cards.Add(new CardInfo(name, r[1].AsBool(true), r[2].AsInt(), r[3].AsInt(), r[4].AsInt(), r[5].AsBool(true), detail, inHand)
+            s.Cards.Add(new CardInfo(name, r[1].AsBool(true), countdownLeft, r[3].AsInt(), r[4].AsInt(), r[5].AsBool(true), detail, inHand)
             {
                 BaseName = r[7].AsString().Length > 0 ? name : CardText.DecorateName(ctx, r[0].AsString(), r[6].AsString().Replace("-", "")),
                 Weakened = r[6].AsString().Contains('-'),
@@ -313,10 +317,20 @@ public sealed class BattleNarrator
             foreach (var name in old.Keys.Where(n => !now.ContainsKey(n))) ctx.SayEvent(Strings.T("battle.status_lost", who, name));
         }
 
-        foreach (var card in after.Cards.Where(c => c.Countdown > 0 && c.CountdownLeft <= 0))
+        // A countdown card comes down as dice land on it. The player put their own dice there and
+        // only needs to hear when it is ready; the enemy's dice landing is otherwise invisible
+        // (third play-test: "Spiky Potion is ready" came out of nowhere after three dice).
+        foreach (var card in after.Cards.Where(c => c.Countdown > 0))
         {
             var was = before.Cards.FirstOrDefault(c => c.Name == card.Name);
-            if (was is { CountdownLeft: > 0 }) ctx.SayEvent(Strings.T("battle.card_ready", card.Name));
+            if (was == null || card.CountdownLeft >= was.CountdownLeft) continue;
+            if (isPlayer) { if (card.CountdownLeft <= 0) ctx.SayEvent(Strings.T("battle.card_ready", card.Name)); continue; }
+            // The dice just put there, when the game still has them on the card; else the amount.
+            var had = before.Dice.Where(d => d.On == card.Name).Select(d => d.Value).ToList();
+            var put = after.Dice.Where(d => d.On == card.Name && !d.Blind).Select(d => d.Value).Where(v => !had.Remove(v)).ToList();
+            var dice = put.Count > 0 ? string.Join(", ", put) : (was.CountdownLeft - card.CountdownLeft).ToString();
+            ctx.SayEvent(card.CountdownLeft > 0 ? Strings.T("battle.enemy_countdown", who, dice, card.Name, card.CountdownLeft)
+                                                : Strings.T("battle.enemy_countdown_ready", who, dice, card.Name));
         }
 
         if (after.DeckStyle)
