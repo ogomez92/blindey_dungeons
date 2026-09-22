@@ -17,6 +17,10 @@ public sealed class Config
     public bool AllowInterrupt { get; set; } = true;   // only honoured for explicit interrupt requests
     public bool Braille { get; set; } = true;
     public bool LogSpokenLines { get; set; } = true;
+    /// <summary>macOS only (AVSpeech): 0-100, 50 is the system's normal rate. Also on Ctrl+Plus / Ctrl+Minus.</summary>
+    public int SpeechRate { get; set; } = 50;
+    /// <summary>macOS only: a voice name ("Samantha"), identifier or language ("es-ES"); empty = system voice.</summary>
+    public string MacVoice { get; set; } = "";
     public bool SpeakGameLog { get; set; } = false;    // echo raw game stdout (debugging)
 
     public bool AnnounceDice { get; set; } = true;
@@ -28,7 +32,23 @@ public sealed class Config
     public bool ScopeHotkeysToGame { get; set; } = true;
 
     public static string DefaultPath =>
-        Path.Combine(AppContext.BaseDirectory, "DiceyA11y.cfg");
+        Path.Combine(DataDirectory, "DiceyA11y.cfg");
+
+    /// <summary>
+    /// Where the config and logs go: next to the executable on Windows; on macOS the
+    /// executable is inside an app bundle, so ~/Library/Application Support/DiceyA11y.
+    /// </summary>
+    public static string DataDirectory
+    {
+        get
+        {
+            if (!OperatingSystem.IsMacOS()) return AppContext.BaseDirectory;
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                                   "Library", "Application Support", "DiceyA11y");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+    }
 
     public static Config Load(string? path = null)
     {
@@ -56,8 +76,7 @@ public sealed class Config
         return config;
     }
 
-    private static bool HasGame(string dir) =>
-        !string.IsNullOrWhiteSpace(dir) && File.Exists(Path.Combine(dir, "diceydungeons.exe"));
+    private static bool HasGame(string dir) => Launcher.GamePaths.HasGame(dir);
 
     /// <summary>
     /// The installer puts the launcher in a folder inside the game folder, so the parent is
@@ -65,6 +84,7 @@ public sealed class Config
     /// </summary>
     private static string DetectGameDirectory()
     {
+        if (!OperatingSystem.IsWindows()) return DetectMacGameDirectory();
         const string fallback = @"C:\Program Files (x86)\Steam\steamapps\common\Dicey Dungeons";
         try
         {
@@ -91,6 +111,24 @@ public sealed class Config
         return fallback;
     }
 
+    /// <summary>
+    /// The mod's folder (or its .app) usually sits inside the game folder, as on Windows;
+    /// then the usual install places.
+    /// </summary>
+    private static string DetectMacGameDirectory()
+    {
+        try
+        {
+            var dir = AppContext.BaseDirectory.TrimEnd('/');
+            for (var i = 0; i < 5 && dir != null; i++, dir = Path.GetDirectoryName(dir))
+                if (HasGame(dir)) return dir;
+            foreach (var candidate in Launcher.GamePaths.MacCandidates())
+                if (HasGame(candidate)) return candidate;
+        }
+        catch { /* fall through */ }
+        return "/Applications/Dicey Dungeons";
+    }
+
     private static void Apply(Config c, string key, string value)
     {
         switch (key.ToLowerInvariant())
@@ -101,6 +139,8 @@ public sealed class Config
             case "allowinterrupt": c.AllowInterrupt = Bool(value, c.AllowInterrupt); break;
             case "braille": c.Braille = Bool(value, c.Braille); break;
             case "logspokenlines": c.LogSpokenLines = Bool(value, c.LogSpokenLines); break;
+            case "speechrate": c.SpeechRate = Math.Clamp(Int(value, c.SpeechRate), 0, 100); break;
+            case "macvoice": c.MacVoice = value; break;
             case "speakgamelog": c.SpeakGameLog = Bool(value, c.SpeakGameLog); break;
             case "announcedice": c.AnnounceDice = Bool(value, c.AnnounceDice); break;
             case "announceenemyequipment": c.AnnounceEnemyEquipment = Bool(value, c.AnnounceEnemyEquipment); break;
@@ -141,6 +181,12 @@ public sealed class Config
             AllowInterrupt={c.AllowInterrupt}
             Braille={c.Braille}
             LogSpokenLines={c.LogSpokenLines}
+
+            # macOS speech (AVSpeech). Rate 0-100, 50 is normal; Ctrl+Plus and Ctrl+Minus
+            # change it in game and save it here. MacVoice: a voice name such as Samantha,
+            # or a language such as es-ES; empty uses the system voice.
+            SpeechRate={c.SpeechRate}
+            MacVoice={c.MacVoice}
             SpeakGameLog={c.SpeakGameLog}
 
             # What to announce automatically

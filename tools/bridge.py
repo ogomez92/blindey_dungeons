@@ -15,8 +15,18 @@ import os
 import sys
 import time
 
-PIPE = r"\\.\pipe\DiceyA11yBridge"
+PIPE = r"\\.\pipe\DiceyA11yBridge" if os.name == "nt" else f"/tmp/diceya11y-bridge-{os.getuid()}.sock"
 UNIT = "\x1f"
+
+
+def open_pipe(path):
+    """A Windows named pipe opens like a file; on macOS the same protocol runs on a Unix socket."""
+    if os.name == "nt":
+        return open(path, "r+b", buffering=0)
+    import socket
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(path)
+    return s.makefile("rwb", buffering=0)
 
 
 class Bridge:
@@ -24,7 +34,7 @@ class Bridge:
         deadline = time.time() + timeout
         while True:
             try:
-                self.f = open(PIPE, "r+b", buffering=0)
+                self.f = open_pipe(PIPE)
                 break
             except OSError:
                 if time.time() > deadline:

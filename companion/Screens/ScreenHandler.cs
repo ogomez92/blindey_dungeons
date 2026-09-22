@@ -345,5 +345,5 @@ public class ScreenHandler
     {
         Strings.T("help.nav"), Strings.T("help.read"), Strings.T("help.pad"),
         Strings.T("help.buffers"), Strings.T("help.cursor"), Strings.T("help.where"),
-    };
+    }.Concat(OperatingSystem.IsMacOS() ? new[] { Strings.T("help.rate") } : Array.Empty<string>());
 }

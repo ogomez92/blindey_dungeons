@@ -4,7 +4,8 @@ using DiceyA11y.Core;
 namespace DiceyA11y.Speech;
 
 /// <summary>
-/// The only class in the mod that touches <see cref="PrismNative"/>.
+/// The only class in the mod that speaks: through Prism on Windows, AVSpeech on macOS
+/// (<see cref="ISpeechEngine"/>).
 ///
 /// A Prism backend instance is not thread safe, so every call is funnelled onto a
 /// single dedicated speech thread. Callers (the stdout pump, the hotkey hook, the
@@ -24,14 +25,12 @@ public sealed class ScreenReaderOutput : IDisposable
     private readonly Action<string> _log;
     private Thread? _thread;
 
-    private IntPtr _ctx = IntPtr.Zero;
-    private IntPtr _backend = IntPtr.Zero;
-    private ulong _features;
+    private ISpeechEngine? _engine;
     private DateTime _lastRecovery = DateTime.MinValue;
     private volatile bool _running;
 
-    public string BackendName { get; private set; } = "(none)";
-    public bool Available => _backend != IntPtr.Zero;
+    public string BackendName => _engine?.Name ?? "(none)";
+    public bool Available => _engine != null;
 
     /// <summary>Raised for unsolicited announcements so buffers/logs can record them.</summary>
     public event Action<string>? EventSpoken;
@@ -44,40 +43,10 @@ public sealed class ScreenReaderOutput : IDisposable
 
     public bool Initialize(string nativeDirectory)
     {
-        if (!PrismNative.Load(nativeDirectory, out var detail))
-        {
-            _log($"Speech unavailable: {detail}");
-            return false;
-        }
-        _log($"Loaded native library: {detail}");
-
-        try
-        {
-            // prism_init(NULL) is valid and uses the global backend registry.
-            _ctx = PrismNative.prism_init(IntPtr.Zero);
-            if (_ctx == IntPtr.Zero)
-            {
-                _log("Speech unavailable: prism_init returned NULL");
-                return false;
-            }
-
-            if (!CreateBackend())
-            {
-                _log("Speech unavailable: no screen reader or TTS backend could be created. "
-                     + "Start NVDA/JAWS (or make sure a SAPI voice is installed) and restart.");
-                return false;
-            }
-        }
-        catch (DllNotFoundException ex)
-        {
-            _log($"Speech unavailable: prism.dll could not be loaded ({ex.Message})");
-            return false;
-        }
-        catch (BadImageFormatException)
-        {
-            _log("Speech unavailable: prism.dll is the wrong architecture. A 64-bit build is required.");
-            return false;
-        }
+        _engine = OperatingSystem.IsMacOS()
+            ? AvSpeechEngine.Create(_config.SpeechRate, _config.MacVoice, _log)
+            : PrismEngine.Create(nativeDirectory, _config.Braille, _log);
+        if (_engine == null) return false;
 
         _running = true;
         _thread = new Thread(Pump) { IsBackground = true, Name = "DiceyA11y speech" };
@@ -85,17 +54,15 @@ public sealed class ScreenReaderOutput : IDisposable
         return true;
     }
 
-    private bool CreateBackend()
-    {
-        // create_best returns the highest-priority backend that initializes,
-        // ALREADY initialized - do not call prism_backend_initialize on it.
-        _backend = PrismNative.prism_registry_create_best(_ctx);
-        if (_backend == IntPtr.Zero) return false;
+    /// <summary>True when the mod sets the rate (AVSpeech); a screen reader keeps its own.</summary>
+    public bool OwnsRate => _engine?.Rate != null;
 
-        BackendName = PrismNative.PtrToString(PrismNative.prism_backend_name(_backend));
-        _features = PrismNative.prism_backend_get_features(_backend);
-        _log($"Speech backend: {BackendName} (features 0x{_features:X})");
-        return true;
+    /// <summary>Moves the rate by <paramref name="delta"/> percent and returns the new value, or null.</summary>
+    public int? ChangeRate(int delta)
+    {
+        if (_engine?.Rate is not { } rate) return null;
+        _engine.Rate = rate + delta;
+        return _engine.Rate;
     }
 
     /// <summary>On-demand readouts and focus echoes. Not recorded as an event.</summary>
@@ -135,10 +102,7 @@ public sealed class ScreenReaderOutput : IDisposable
     {
         while (_priority.TryDequeue(out _)) { }
         while (_events.TryDequeue(out _)) { }
-        if (_backend != IntPtr.Zero && (_features & PrismNative.FeatureStop) != 0)
-        {
-            try { PrismNative.prism_backend_stop(_backend); } catch { /* best effort */ }
-        }
+        try { _engine?.Stop(); } catch { /* best effort */ }
     }
 
     private void Pump()
@@ -159,23 +123,13 @@ public sealed class ScreenReaderOutput : IDisposable
 
     private void Speak(Utterance utterance)
     {
-        if (_backend == IntPtr.Zero) return;
+        if (_engine == null) return;
 
-        var payload = PrismNative.Utf8Z(utterance.Text);
-        int result;
+        bool ok;
+        string error;
         try
         {
-            result = (_features & PrismNative.FeatureOutput) != 0
-                ? PrismNative.prism_backend_output(_backend, payload, utterance.Interrupt)
-                : PrismNative.prism_backend_speak(_backend, payload, utterance.Interrupt);
-
-            if (result == PrismNative.PrismOk
-                && _config.Braille
-                && (_features & PrismNative.FeatureOutput) == 0
-                && (_features & PrismNative.FeatureBraille) != 0)
-            {
-                PrismNative.prism_backend_braille(_backend, payload);
-            }
+            ok = _engine.Speak(utterance.Text, utterance.Interrupt, out error);
         }
         catch (Exception ex)
         {
@@ -183,18 +137,18 @@ public sealed class ScreenReaderOutput : IDisposable
             return;
         }
 
-        if (result == PrismNative.PrismOk)
+        if (ok)
         {
             if (_config.LogSpokenLines) _log($"Spoke: {utterance.Text}");
             return;
         }
 
-        _log($"Speech failed ({PrismNative.ErrorText(result)}) for: {utterance.Text}");
+        _log($"Speech failed ({error}) for: {utterance.Text}");
         TryRecover();
     }
 
     /// <summary>
-    /// Rate-limited backend re-creation. This is what lets the mod come back to life
+    /// Rate-limited engine re-creation. This is what lets the mod come back to life
     /// when the player starts or restarts their screen reader after the game.
     /// </summary>
     private void TryRecover()
@@ -204,12 +158,7 @@ public sealed class ScreenReaderOutput : IDisposable
 
         try
         {
-            if (_backend != IntPtr.Zero)
-            {
-                PrismNative.prism_backend_free(_backend);
-                _backend = IntPtr.Zero;
-            }
-            if (CreateBackend()) _log("Re-acquired a speech backend.");
+            if (_engine?.Recover() == true) _log("Re-acquired a speech backend.");
         }
         catch (Exception ex)
         {
@@ -223,21 +172,7 @@ public sealed class ScreenReaderOutput : IDisposable
         try { _pending.Release(); } catch { }
         _thread?.Join(1500);
         _pending.Dispose();
-
-        if (_backend != IntPtr.Zero)
-        {
-            try
-            {
-                if ((_features & PrismNative.FeatureStop) != 0) PrismNative.prism_backend_stop(_backend);
-                PrismNative.prism_backend_free(_backend);
-            }
-            catch { }
-            _backend = IntPtr.Zero;
-        }
-        if (_ctx != IntPtr.Zero)
-        {
-            try { PrismNative.prism_shutdown(_ctx); } catch { }
-            _ctx = IntPtr.Zero;
-        }
+        _engine?.Dispose();
+        _engine = null;
     }
 }

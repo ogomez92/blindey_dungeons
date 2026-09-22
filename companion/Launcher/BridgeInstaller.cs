@@ -26,8 +26,9 @@ public static class BridgeInstaller
     {
         try
         {
-            return File.Exists(Path.Combine(gameDir, "lime_orig.dll"))
-                   && IsBridge(Path.Combine(gameDir, "lime.ndll"));
+            var dir = GamePaths.LimeDirectory(gameDir);
+            return File.Exists(Path.Combine(dir, GamePaths.OriginalLime))
+                   && IsBridge(Path.Combine(dir, "lime.ndll"));
         }
         catch { return false; }
     }
@@ -37,14 +38,15 @@ public static class BridgeInstaller
     {
         try
         {
-            var lime = Path.Combine(gameDir, "lime.ndll");
-            var orig = Path.Combine(gameDir, "lime_orig.dll");
+            var dir = GamePaths.LimeDirectory(gameDir);
+            var lime = Path.Combine(dir, "lime.ndll");
+            var orig = Path.Combine(dir, GamePaths.OriginalLime);
             var payload = PayloadPath;
 
             // A developer build has no payload next to it; the dev scripts install the bridge.
             if (!File.Exists(payload) || !File.Exists(lime)) return;
             // The running game holds lime.ndll open.
-            if (Process.GetProcessesByName("diceydungeons").Length > 0) return;
+            if (Process.GetProcessesByName(GamePaths.ProcessName).Length > 0) return;
             if (!IsBridge(payload))
             {
                 log($"{payload} is not a bridge build (marker missing); leaving the game folder alone.");
@@ -60,6 +62,7 @@ public static class BridgeInstaller
                 }
                 if (SameContent(payload, lime)) return;
                 File.Copy(payload, lime, overwrite: true);
+                Unquarantine(lime);
                 log("Bridge updated to the one shipped with this version.");
                 return;
             }
@@ -72,6 +75,7 @@ public static class BridgeInstaller
             }
             File.Copy(lime, orig, overwrite: true);
             File.Copy(payload, lime, overwrite: true);
+            Unquarantine(lime);
             log("Bridge installed; the game's lime.ndll is kept as lime_orig.dll.");
         }
         catch (Exception ex)
@@ -79,6 +83,19 @@ public static class BridgeInstaller
             log("Could not install the bridge: " + ex.Message);
         }
     }
+
+    /// <summary>
+    /// A bridge that came out of a downloaded zip carries the quarantine flag, and Gatekeeper
+    /// would then refuse to let the game load it. macOS only.
+    /// </summary>
+    private static void Unquarantine(string path)
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        try { removexattr(path, "com.apple.quarantine", 0); } catch { }
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", CharSet = System.Runtime.InteropServices.CharSet.Ansi)]
+    private static extern int removexattr(string path, string name, int options);
 
     // Export names are plain ASCII in the file, so a byte search is enough.
     private static bool IsBridge(string path) =>

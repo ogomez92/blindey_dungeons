@@ -76,6 +76,34 @@ Set the Steam launch options of step 3 above if you want to start it from Steam.
 To remove it by hand, run `DiceyA11y\tools\install_bridge.ps1 -Uninstall` in PowerShell (or
 verify the game files in Steam) and delete the `DiceyA11y` folder.
 
+## macOS
+
+The Mac version speaks with the system voice (AVSpeech); it does not need VoiceOver, and
+its speech rate is its own: **Control Plus** and **Control Minus** change it in steps of 5,
+and the setting is kept.
+
+1. Put **Dicey Dungeons Accessibility.app** in the game folder, next to `diceydungeons.app`
+   (for the GOG version, `/Applications/Dicey Dungeons`). Anywhere else works too if the
+   game is in `/Applications` or Steam's usual place.
+2. Open it. It has no window and no Dock icon: it installs the bridge into the game
+   (inside `diceydungeons.app/Contents/MacOS`, the original kept as `lime_orig.dll`),
+   starts the game, and quits when the game does.
+3. The first time, macOS asks for the **Accessibility** permission, which the mod needs to
+   read the keyboard. The mod says so until it has it: System Settings, Privacy and
+   Security, Accessibility, turn on Dicey Dungeons Accessibility. The keys work as soon as
+   it is on; nothing needs restarting. A rebuilt or updated app has to be allowed again.
+   **If the mod keeps saying it cannot read the keyboard although the switch is on**,
+   macOS is holding a permission for an older copy of the app: select Dicey Dungeons
+   Accessibility in that list, remove it with the minus button, then add it again with the
+   plus button (it is in the game folder) and turn it on.
+4. A downloaded app is blocked the first time ("unidentified developer"): Control-click it
+   and choose Open, or run `xattr -cr "Dicey Dungeons Accessibility.app"` once.
+
+The F keys need **fn** held down unless "Use F1, F2, etc. keys as standard function keys" is
+on (System Settings, Keyboard). Settings and logs are in
+`~/Library/Application Support/DiceyA11y`; the bridge's log stays next to the game's
+executable inside `diceydungeons.app`. Tested with the GOG Mac version 1.12 on Apple silicon.
+
 ## Keys
 
 Active only while the Dicey Dungeons window has focus.
@@ -217,6 +245,8 @@ AnnounceStatusChanges=True
 MaxEventBuffer=200
 ScopeHotkeysToGame=True       # False makes the keys global (not recommended)
 ModIds=                       # other Polymod mods to load, comma separated
+SpeechRate=50                 # macOS only: 0-100, 50 is normal (Control Plus / Minus)
+MacVoice=                     # macOS only: a voice name (Samantha) or language (es-ES)
 ```
 
 ## If something is wrong
@@ -247,6 +277,10 @@ Logs are written next to the exe and overwritten each launch:
 dotnet build companion\DiceyA11y.csproj -c Release
 .\tools\package_release.ps1   # release folder and zip, as the release workflow builds them
 ```
+
+On a Mac: `companion/Mac/package_mac.sh --install` builds the bridge (`bridge/build_mac.sh`),
+the Swift helper and a self-contained app, and copies it into `/Applications/Dicey Dungeons`.
+`tools/bridge.py` and `tools/dev.py` work on the Mac too.
 
 Releases are cut by `.github/workflows/release.yml` on a `v*.*.*` tag that matches
 `<Version>` in `companion/DiceyA11y.csproj`. It builds everything without the game (the

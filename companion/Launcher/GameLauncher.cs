@@ -34,7 +34,7 @@ public sealed class GameLauncher : IDisposable
         _log = log;
     }
 
-    public string ExecutablePath => Path.Combine(_config.GameDirectory, "diceydungeons.exe");
+    public string ExecutablePath => GamePaths.Executable(_config.GameDirectory);
 
     public bool Validate(out string problem)
     {
@@ -45,13 +45,13 @@ public sealed class GameLauncher : IDisposable
         }
         if (!File.Exists(ExecutablePath))
         {
-            problem = $"diceydungeons.exe not found in {_config.GameDirectory}.";
+            problem = $"{GamePaths.ExecutableName} not found in {_config.GameDirectory}.";
             return false;
         }
 
         // The Polymod script mod is only the fallback for a game folder without the bridge.
         // With the bridge installed nothing else is needed, so a missing mod is not an error.
-        var bridged = File.Exists(Path.Combine(_config.GameDirectory, "lime_orig.dll"));
+        var bridged = File.Exists(Path.Combine(GamePaths.LimeDirectory(_config.GameDirectory), GamePaths.OriginalLime));
         if (!bridged && !ModFolders().All(Directory.Exists))
         {
             problem = "Neither the accessibility bridge nor the fallback script mod is installed in "
@@ -70,7 +70,7 @@ public sealed class GameLauncher : IDisposable
     /// <summary>True when the mod was started after the game (from Steam, say): attach, do not launch.</summary>
     public bool AttachIfRunning()
     {
-        var running = Process.GetProcessesByName("diceydungeons").FirstOrDefault();
+        var running = Process.GetProcessesByName(GamePaths.ProcessName).FirstOrDefault();
         if (running == null) return false;
         _process = running;
         _process.EnableRaisingEvents = true;
@@ -105,6 +105,12 @@ public sealed class GameLauncher : IDisposable
         try { _rawLog = new StreamWriter(rawLogPath, append: false) { AutoFlush = true }; }
         catch (Exception ex) { _log($"Could not open raw game log: {ex.Message}"); }
 
+        if (OperatingSystem.IsMacOS())
+        {
+            StartThroughLaunchServices(args);
+            return;
+        }
+
         _log($"Launching: {ExecutablePath} {string.Join(' ', args)}");
 
         _process = new Process { StartInfo = info, EnableRaisingEvents = true };
@@ -115,6 +121,34 @@ public sealed class GameLauncher : IDisposable
         _process.Start();
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
+    }
+
+    /// <summary>
+    /// macOS: started by LaunchServices, as from Finder, so the game comes to the front and
+    /// owns its window; a child process of a background app can open behind other windows.
+    /// Its stdout is then not ours, which only the old script-mod fallback ever read.
+    /// </summary>
+    private void StartThroughLaunchServices(List<string> args)
+    {
+        var bundle = Path.GetFullPath(Path.Combine(GamePaths.LimeDirectory(_config.GameDirectory), "..", ".."));
+        var info = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+        info.ArgumentList.Add("-a");
+        info.ArgumentList.Add(bundle);
+        if (args.Count > 0)
+        {
+            info.ArgumentList.Add("--args");
+            foreach (var a in args) info.ArgumentList.Add(a);
+        }
+        _log($"Launching: open -a {bundle} {string.Join(' ', args)}");
+        using (var open = Process.Start(info)) open?.WaitForExit(15000);
+
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (AttachIfRunning()) return;
+            Thread.Sleep(250);
+        }
+        throw new InvalidOperationException("the game did not start");
     }
 
     private void Handle(string? line)

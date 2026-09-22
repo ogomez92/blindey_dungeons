@@ -53,7 +53,7 @@ system that the keyboard does not drive — except the map, which is effectively
 - **bridge/** (C++, MSVC) knows nothing about Dicey Dungeons. It evaluates expressions
   against live Haxe objects and returns values. All game knowledge is in the companion,
   so wording and screen logic change without touching native code or restarting the game.
-- **companion/** owns the keyboard, decides what to say, and speaks through Prism.
+- **companion/** owns the keyboard, decides what to say, and speaks through Prism (Windows) or AVSpeech (macOS, §9).
 - **mod/** (Polymod hscript) is the *old* battle-only path. It is now a fallback used only
   when the bridge is not installed; with the bridge present its output is ignored.
 
@@ -455,7 +455,35 @@ callable through reflection ("not a function") although their static *variables*
 
 ---
 
-## 9. Releases and the installer
+## 9. macOS
+
+Established 2026-09-22 on the **GOG Mac build 1.12.0** (`/Applications/Dicey Dungeons`),
+Apple silicon. Everything above about the game (classes, statics, hxcpp 4.0.4, the three
+Lime exports, the resolver path, closure receiver at +8) held unchanged: the companion's
+game logic runs as is.
+
+| Fact | Consequence |
+|---|---|
+| `diceydungeons` and `lime.ndll` are **x86_64 Mach-O, unsigned** (runs under Rosetta; `Entitlements.plist` asks for the sandbox but, unsigned, is never applied) | The bridge is built x86_64 and loads with no signing or library-validation problem. The companion is native arm64; they only share a socket. |
+| The executable and `lime.ndll` live in `diceydungeons.app/Contents/MacOS`; `mods/` is beside the `.app` | `GameDirectory` = the folder holding the `.app`; `Launcher/GamePaths.cs` maps it to the swap folder. The backup keeps the name `lime_orig.dll` on both platforms. |
+| Mach-O can re-export a whole library | `bridge/build_mac.sh` links with `-reexport_library` against a **stub** `lime_orig.dll` generated from `bridge/lime_exports_mac.txt` (install name `@loader_path/lime_orig.dll`); dyld finds our three exports first and everything else in the real Lime. The build never reads the game. |
+| No `/EHa` | `bridge.cpp` installs a SIGSEGV/SIGBUS handler; a fault on the main thread inside `Guard` is `siglongjmp`ed into a `!memory fault` reply, every other fault is chained to the previous handler. Re-installed before each batch in case the game installs its own. **Not yet exercised by a real fault.** |
+| Transport | Unix socket `/tmp/diceya11y-bridge-<uid>.sock` (`SO_NOSIGPIPE`, or a vanishing client would kill the game). .NET's `NamedPipeClientStream` treats a rooted name as a socket path, so `BridgeClient` only changes the name. The dev pipe is .NET's own (`$TMPDIR/CoreFxPipe_DiceyA11yDev`). |
+| Speech | `Speech/ISpeechEngine`: `PrismEngine` (Windows) / `AvSpeechEngine` (macOS). AVSpeech rate is the mod's (`SpeechRate` 0-100, Ctrl+Plus/Minus, saved); `MacVoice` optional. |
+| **AVSpeech needs the main run loop** | Measured: with the main thread blocked, the first utterance plays and every later one is silently dropped (the log still says `Spoke:`). On macOS `Program` waits for the game in `MacNative.WaitOnMainLoop` (runs `CFRunLoopRunInMode` on the main thread) instead of `done.Wait()`. `DICEYA11Y_SPEECH_TRACE=1` prints `AVSpeech started:` per utterance really started. |
+| Keyboard | `companion/Mac/Native/DiceyMac.swift` (libDiceyMac.dylib: speech, CGEventTap, frontmost pid). `MacKeyTap` maps Mac keycodes to the Windows VK codes, so **all bindings are shared**; Command counts as Alt (never matches, always reaches the system). The tap needs the **Accessibility** permission; until granted the mod says so every 30 s and starts the tap by itself once it is on. |
+| Focus scoping | `CGWindowListCopyWindowInfo`, first layer-0 window's owner. `NSWorkspace.frontmostApplication` never updates in a process without an app run loop. |
+| Launching | `open -a diceydungeons.app` (LaunchServices), then attach by process name: a child of a background app can open behind other windows. Game stdout is therefore not read on the Mac (only the old script-mod fallback used it). Attaching to a non-child process still gets `Exited`: measured, the companion quits with the game. |
+| Packaging | `companion/Mac/package_mac.sh [--arch x64] [--install]`: self-contained publish inside `Dicey Dungeons Accessibility.app`, `LSUIElement` (no Dock icon, no window, no Terminal), bridge payload in `Contents/MacOS/bridge/`, ad-hoc signed. The Accessibility grant is tied to the signature, so each rebuild must be allowed again. Config and logs: `~/Library/Application Support/DiceyA11y` (`Config.DataDirectory`). |
+
+Not verified on the Mac yet: real key presses through the tap (the dev pipe was used),
+the screen cursor's synthetic mouse (`__onMouse` takes window pixels; Retina points vs
+pixels untested), the Steam Mac build's folder layout (`GamePaths.MacCandidates` guesses),
+Intel Macs.
+
+---
+
+## 10. Releases and the installer
 
 Repository: `ogomez92/blindey_dungeons`. A `v*.*.*` tag matching `<Version>` in
 `companion/DiceyA11y.csproj` runs `.github/workflows/release.yml`, which calls

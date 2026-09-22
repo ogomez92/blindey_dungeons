@@ -15,3 +15,9 @@ game_src/
 # Bridge build output and a local safety copy of the game's own lime.ndll (copyrighted)
 bridge/bin/
 bridge/orig-backup/
+
+# Mac native helper build output
+companion/Mac/bin/
+
+# macOS Finder metadata
+.DS_Store

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using DiceyA11y.Mac;
 
 namespace DiceyA11y.Input;
 
@@ -149,11 +150,22 @@ public sealed class HotkeyHook : IDisposable
 
     public IEnumerable<Chord> Bindings => _bindings.Keys;
 
+    /// <summary>macOS: runs when the keyboard cannot be read until the player grants a permission.</summary>
+    public Action NeedsPermission { get; set; } = () => { };
+
+    /// <summary>macOS: runs when the keyboard starts working after that permission was granted.</summary>
+    public Action Ready { get; set; } = () => { };
+
     public void Start()
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            MacKeyTap.Start(this, _log, NeedsPermission, Ready);
+            return;
+        }
         _running = true;
         _thread = new Thread(Run) { IsBackground = true, Name = "DiceyA11y hotkeys" };
-        _thread.SetApartmentState(ApartmentState.STA);
+        if (OperatingSystem.IsWindows()) _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
     }
 
@@ -185,49 +197,59 @@ public sealed class HotkeyHook : IDisposable
         if (nCode < 0) return CallNextHookEx(_hook, nCode, wParam, lParam);
 
         var message = (int)wParam;
-        if (message is WM_KEYUP or WM_SYSKEYUP)
+        var down = message is WM_KEYDOWN or WM_SYSKEYDOWN;
+        if (!down && message is not (WM_KEYUP or WM_SYSKEYUP))
+            return CallNextHookEx(_hook, nCode, wParam, lParam);
+
+        var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+        var swallow = OnKey((int)data.vkCode, down,
+            () => ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0,
+                   (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
+                   (GetAsyncKeyState(VK_MENU) & 0x8000) != 0));
+        return swallow ? 1 : CallNextHookEx(_hook, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// One key event from either platform, as a Windows virtual-key code. True = swallow it.
+    /// Must return quickly: it runs inside the system's keyboard hook or event tap.
+    /// </summary>
+    internal bool OnKey(int vk, bool down, Func<(bool Shift, bool Control, bool Alt)> modifiers)
+    {
+        if (!down)
         {
             // Released even if focus has moved away since: a button must never stay stuck.
-            var up = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-            lock (_observedDown) _observedDown.Remove((int)up.vkCode);
+            lock (_observedDown) _observedDown.Remove(vk);
             Action? release;
-            lock (_heldDown) { _heldDown.Remove((int)up.vkCode, out release); }
-            if (release == null) return CallNextHookEx(_hook, nCode, wParam, lParam);
+            lock (_heldDown) { _heldDown.Remove(vk, out release); }
+            if (release == null) return false;
             _ordered.Enqueue(release, _log);
-            return 1;
+            return true;
         }
-
-        if (message is not (WM_KEYDOWN or WM_SYSKEYDOWN))
-            return CallNextHookEx(_hook, nCode, wParam, lParam);
 
         try
         {
-            var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
             lock (_heldDown)
             {
-                if (_heldDown.ContainsKey((int)data.vkCode)) return 1;   // auto-repeat of a held key
+                if (_heldDown.ContainsKey(vk)) return true;   // auto-repeat of a held key
             }
-            if (_observed.TryGetValue((int)data.vkCode, out var observe))
+            if (_observed.TryGetValue(vk, out var observe))
             {
                 bool first;
-                lock (_observedDown) first = _observedDown.Add((int)data.vkCode);
+                lock (_observedDown) first = _observedDown.Add(vk);
                 if (first && (!ScopeToGameWindow || GameWindowFocused()) && _shouldHandle())
                     ThreadPool.QueueUserWorkItem(_ => { try { observe(); } catch (Exception ex) { _log($"Key observer failed: {ex.Message}"); } });
-                return CallNextHookEx(_hook, nCode, wParam, lParam);
+                return false;   // the key goes on to the game
             }
-            var chord = new Chord(
-                (int)data.vkCode,
-                (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0,
-                (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
-                (GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
+            var (shift, control, alt) = modifiers();
+            var chord = new Chord(vk, shift, control, alt);
 
             if (_heldBindings.TryGetValue(chord, out var held)
                 && (!ScopeToGameWindow || GameWindowFocused())
                 && _shouldHandle())
             {
-                lock (_heldDown) { _heldDown[(int)data.vkCode] = held.Up; }
+                lock (_heldDown) { _heldDown[vk] = held.Up; }
                 _ordered.Enqueue(held.Down, _log);
-                return 1;
+                return true;
             }
 
             if (_bindings.TryGetValue(chord, out var handler)
@@ -235,25 +257,25 @@ public sealed class HotkeyHook : IDisposable
                 && _shouldHandle())
             {
                 // Run off the hook thread: a slow handler here would stall all input
-                // system-wide, and Windows would silently drop the hook.
+                // system-wide, and the system would silently drop the hook.
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
                     try { handler(); }
                     catch (Exception ex) { _log($"Hotkey handler failed: {ex.Message}"); }
                 });
-                return 1; // swallow, so the game never sees it
+                return true; // swallow, so the game never sees it
             }
         }
         catch (Exception ex)
         {
             _log($"Hotkey hook error: {ex.Message}");
         }
-
-        return CallNextHookEx(_hook, nCode, wParam, lParam);
+        return false;
     }
 
     private bool GameWindowFocused()
     {
+        if (OperatingSystem.IsMacOS()) return MacKeyTap.GameFocused(GameProcessId);
         var hwnd = GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return false;
 
@@ -271,6 +293,7 @@ public sealed class HotkeyHook : IDisposable
 
     public void Dispose()
     {
+        if (OperatingSystem.IsMacOS()) { MacKeyTap.Stop(); return; }
         _running = false;
         if (_threadId != 0) PostThreadMessage(_threadId, 0x0012 /* WM_QUIT */, IntPtr.Zero, IntPtr.Zero);
         _thread?.Join(1000);
@@ -300,10 +323,11 @@ public sealed class HotkeyHook : IDisposable
     public static class Keys
     {
         public const int F1 = 0x70, F2 = 0x71, F3 = 0x72, F4 = 0x73, F5 = 0x74, F6 = 0x75;
-        public const int F7 = 0x76, F8 = 0x77, F9 = 0x78, F12 = 0x7B;
+        public const int F7 = 0x76, F8 = 0x77, F9 = 0x78, F10 = 0x79, F12 = 0x7B;
         public const int Left = 0x25, Up = 0x26, Right = 0x27, Down = 0x28;
         public const int Enter = 0x0D, Escape = 0x1B, Space = 0x20, Tab = 0x09, Backspace = 0x08;
         public const int Comma = 0xBC, Period = 0xBE;   // VK_OEM_COMMA, VK_OEM_PERIOD
+        public const int Plus = 0xBB, Minus = 0xBD;     // VK_OEM_PLUS (the =/+ key), VK_OEM_MINUS
         public const int F11 = 0x7A, PageUp = 0x21, PageDown = 0x22, Home = 0x24, End = 0x23;
         public const int LeftControl = 0xA2;   // VK_LCONTROL: a low-level hook reports the side
         public static int Letter(char c) => char.ToUpperInvariant(c);

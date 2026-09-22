@@ -20,7 +20,11 @@ public readonly record struct StageText(int X, int Y, int Width, int Height, str
 /// </summary>
 public sealed class BridgeClient : IDisposable
 {
-    private const string PipeName = "DiceyA11yBridge";
+    // On Unix .NET treats a rooted pipe name as a Unix domain socket path; bridge.cpp
+    // listens on this one (per user, short enough for sun_path).
+    private static string PipeName => OperatingSystem.IsWindows()
+        ? "DiceyA11yBridge"
+        : $"/tmp/diceya11y-bridge-{Mac.MacNative.getuid()}.sock";
     public const char UnitSeparator = '\x1f';
     private const char Unit = UnitSeparator;
 

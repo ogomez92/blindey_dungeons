@@ -11,6 +11,8 @@ public static class Strings
     private static readonly Dictionary<string, string> English = new()
     {
         ["mod.ready"] = "Dicey Dungeons accessibility ready. Press F1 for help.",
+        ["mod.keys_permission"] = "The mod cannot read the keyboard yet. In System Settings, Privacy and Security, Accessibility, turn on Dicey Dungeons Accessibility. The keys start working as soon as it is on.",
+        ["mod.keys_ready"] = "Keyboard ready.",
         ["mod.connected"] = "Connected to the game.",
         ["mod.waiting"] = "Waiting for the game.",
         ["mod.bridge_missing"] = "The accessibility bridge is not installed in the game folder, so only battles can be read. Close the game and run the mod's installer again.",
@@ -284,6 +286,7 @@ public static class Strings
         ["cursor.none"] = "Choose something first with Control Page Down.", ["cursor.clicked"] = "Clicked {0}.",
         ["help.cursor"] = "For anything only the mouse can reach: Control Page Down and Control Page Up step through every piece of text on screen, Control Enter clicks it.",
         ["help.where"] = "F12 says where you are. Control H your health, and in battle Control D your dice and Control E the enemy's health.",
+        ["help.rate"] = "Control plus and Control minus change the speech rate.", ["speech.rate"] = "Rate {0}",
         ["map.healed"] = "Healed {0}. Health {1} of {2}.",
         ["map.hurt"] = "Lost {0} health. Health {1} of {2}.",
         ["map.gold"] = "Gold: {0}.",
@@ -311,6 +314,8 @@ public static class Strings
     private static readonly Dictionary<string, string> Spanish = new()
     {
         ["mod.ready"] = "Accesibilidad de Dicey Dungeons lista. Pulsa F1 para la ayuda.",
+        ["mod.keys_permission"] = "El mod todavía no puede leer el teclado. En Ajustes del Sistema, Privacidad y seguridad, Accesibilidad, activa Dicey Dungeons Accessibility. Las teclas funcionarán en cuanto esté activado.",
+        ["mod.keys_ready"] = "Teclado listo.",
         ["mod.connected"] = "Conectado al juego.",
         ["mod.waiting"] = "Esperando al juego.",
         ["mod.bridge_missing"] = "El puente de accesibilidad no está instalado en la carpeta del juego, así que solo se pueden leer los combates. Cierra el juego y ejecuta de nuevo el instalador del mod.",
@@ -583,6 +588,7 @@ public static class Strings
         ["cursor.none"] = "Primero elige algo con Control Av Pág.", ["cursor.clicked"] = "Clic en {0}.",
         ["help.cursor"] = "Para lo que solo alcanza el ratón: Control Av Pág y Control Re Pág recorren todos los textos de la pantalla, Control Enter hace clic en el elegido.",
         ["help.where"] = "F12 dice dónde estás. Control H tu vida, y en combate Control D tus dados y Control E la vida del enemigo.",
+        ["help.rate"] = "Control más y Control menos cambian la velocidad de la voz.", ["speech.rate"] = "Velocidad {0}",
         ["map.healed"] = "Te curas {0}. Vida {1} de {2}.",
         ["map.hurt"] = "Pierdes {0} de vida. Vida {1} de {2}.",
         ["map.gold"] = "Oro: {0}.",

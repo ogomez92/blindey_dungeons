@@ -38,7 +38,7 @@ public static class Program
 
     public static int Main(string[] args)
     {
-        Console.Title = "Dicey Dungeons Accessibility";
+        try { Console.Title = "Dicey Dungeons Accessibility"; } catch { /* no console: the Mac app */ }
 
         if (args.Contains("--selftest")) return SelfTest();
 
@@ -47,12 +47,13 @@ public static class Program
         OverrideFromArgs(config, args);
 
         var baseDir = AppContext.BaseDirectory;
-        _log = new EventLog(Path.Combine(baseDir, "diceya11y.log"), echoToConsole: true);
+        var dataDir = Config.DataDirectory;   // baseDir on Windows; outside the app bundle on macOS
+        _log = new EventLog(Path.Combine(dataDir, "diceya11y.log"), echoToConsole: true);
         _log.Write($"DiceyA11y starting. Config: {configPath}");
 
         _buffers = new BufferManager(config.MaxEventBuffer);
         _speech = new ScreenReaderOutput(config, _log.Write);
-        var spokenLog = OpenSpokenLog(baseDir);
+        var spokenLog = OpenSpokenLog(dataDir);
         _speech.EventSpoken += text =>
         {
             _lastAnnouncement = text;
@@ -139,8 +140,14 @@ public static class Program
         _pad = new VirtualPad(_bridge, _log.Write);
         _screens = new ScreenMonitor(_bridge, _pad, _speech, _buffers, config, _log.Write);
 
-        _hotkeys = new HotkeyHook(_log.Write) { ScopeToGameWindow = config.ScopeHotkeysToGame };
+        _hotkeys = new HotkeyHook(_log.Write)
+        {
+            ScopeToGameWindow = config.ScopeHotkeysToGame,
+            NeedsPermission = () => _speech.Say(Strings.T("mod.keys_permission"), interrupt: true),
+            Ready = () => _speech.Say(Strings.T("mod.keys_ready"), interrupt: true),
+        };
         BindHotkeys();
+        BindRateKeys(config, configPath);
         BindGamepadKeys();
         _hotkeys.Start();
 
@@ -155,7 +162,7 @@ public static class Program
 
         try
         {
-            if (!launcher.AttachIfRunning()) launcher.Start(Path.Combine(baseDir, "diceya11y-game.log"));
+            if (!launcher.AttachIfRunning()) launcher.Start(Path.Combine(dataDir, "diceya11y-game.log"));
             _hotkeys.GameProcessId = launcher.ProcessId;
             _speech.Say(Strings.T("mod.ready"));
             if (BridgeInstalled(config)) _screens.Start();
@@ -165,7 +172,8 @@ public static class Program
                 _speech.Say(Strings.T("mod.bridge_missing"));
             }
             if (args.Contains("--dev")) new DevPipe(DevCommand, _log.Write).Start();
-            done.Wait();
+            if (OperatingSystem.IsMacOS()) Mac.MacNative.WaitOnMainLoop(done);
+            else done.Wait();
         }
         catch (Exception ex)
         {
@@ -304,6 +312,29 @@ public static class Program
     }
 
     /// <summary>
+    /// Speech rate, where the mod owns it (AVSpeech on macOS; a screen reader has its own).
+    /// Saved to the config, so the next start keeps it.
+    /// </summary>
+    private static Func<int, string> _changeRate = _ => "rate not adjustable";
+
+    private static void BindRateKeys(Config config, string configPath)
+    {
+        if (!_speech.OwnsRate) return;
+        _changeRate = delta =>
+        {
+            if (_speech.ChangeRate(delta) is not { } rate) return "rate not adjustable";
+            config.SpeechRate = rate;
+            try { Config.Save(config, configPath); } catch (Exception ex) { _log.Write("Could not save the rate: " + ex.Message); }
+            var said = Strings.T("speech.rate", rate);
+            _speech.Say(said, interrupt: true);
+            return said;
+        };
+        _hotkeys.Bind(Keys.Plus, () => _changeRate(+5), control: true);
+        _hotkeys.Bind(Keys.Plus, () => _changeRate(+5), shift: true, control: true);   // Ctrl + the "+" itself
+        _hotkeys.Bind(Keys.Minus, () => _changeRate(-5), control: true);
+    }
+
+    /// <summary>
     /// The game has no keyboard navigation, only mouse and gamepad, so these keys are a
     /// gamepad: each is held and released on the mod's virtual pad exactly as pressed, which
     /// keeps the game's own hold-to-repeat. Swallowed by the hook, so nothing acts twice.
@@ -397,6 +428,8 @@ public static class Program
                 "click" => _screens.ClickScreenCursor(),
                 _ => "unknown cursor command",
             };
+        if (parts.Length == 2 && parts[0] == "rate")
+            return _changeRate(parts[1] == "up" ? +5 : -5);
         if (parts.Length == 2 && parts[0] == "status" && Enum.TryParse<StatusKind>(parts[1], true, out var kind))
             return _screens.DescribeStatus(kind);
         if (parts.Length == 2 && parts[0] == "review")
@@ -486,6 +519,13 @@ public static class Program
 
     private static void Pause()
     {
+        // The Mac app has no console: give the spoken error time to finish instead.
+        if (Console.IsInputRedirected)
+        {
+            if (OperatingSystem.IsMacOS()) Mac.MacNative.dm_main_loop_run(10);
+            else Thread.Sleep(10000);
+            return;
+        }
         Console.WriteLine("Press Enter to close.");
         try { Console.ReadLine(); } catch { }
     }
