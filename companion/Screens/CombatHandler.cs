@@ -204,9 +204,32 @@ public sealed partial class CombatHandler : ScreenHandler
         // sliding away, and each frame of that would otherwise count as a new focus.
         if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right or NavKey.Confirm or NavKey.Back) { _navKeyAt = DateTime.UtcNow; _navKey = key; }
         if (key == NavKey.X && ctx.State.Focus == null && !_limitPrompt && !_fleePrompt) _quietUntil = DateTime.UtcNow.AddSeconds(2.5);
-        if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right && MoveCardCursor(ctx, key is NavKey.Left or NavKey.Up ? -1 : 1)) return true;
-        if (OnGroupKey(ctx, key)) return true;   // Tab / Shift+Tab / Page Down / Page Up: CombatGroups.cs
+        if (key is NavKey.Left or NavKey.Right && MoveCardCursor(ctx, key == NavKey.Left ? -1 : 1)) return true;
+        // Up and Down used to be Left and Right's twins on the card list. Whenever the list has
+        // the arrows they move within the Tab group instead (CombatGroups.cs); in dice mode, on
+        // a panel's buttons and under prompts they still reach the game.
+        if (key is NavKey.Up or NavKey.Down && CardListActive(ctx)) { MoveItem(ctx, key == NavKey.Down ? 1 : -1); return true; }
+        if (OnGroupKey(ctx, key)) return true;   // Tab / Shift+Tab: CombatGroups.cs
         return base.OnKey(ctx, key);
+    }
+
+    /// <summary>
+    /// Whether the arrows belong to the mod's card list right now. False leaves them to the
+    /// game: dice mode, a panel's buttons, prompts, dialogue, the enemy's turn.
+    /// </summary>
+    private bool CardListActive(ScreenContext ctx)
+    {
+        if (_paused || _limitPrompt || _fleePrompt || _previewing || _spellSlot != -2 || _narrator.Ended) return false;
+        var v = ctx.Bridge.Batch(Combat + ".state", Combat + ".gamepad_dicemode", Combat + ".gamepad_buttonmode", Selected + ".skillcard");
+        if (!v[0].AsString().StartsWith("playerturn", StringComparison.Ordinal) || v[1].AsBool() || v[2].AsBool()) return false;
+
+        // A panel card under the cursor focuses its button before A is pressed (seen: the Robot's
+        // Calculate), and the game's own arrows then wrap from the panel to some other card. One
+        // button is just the panel's face and the list goes on; several buttons (jackpot prizes,
+        // the six request dice) are a choice, and the arrows belong to it.
+        if (ctx.State.Focus is { } focused
+            && (v[3].AsString().Length == 0 || focused.RawLabel == "dicebutton" || ctx.State.Buttons.Select(b => b.RawLabel).Distinct().Count() > 1)) return false;
+        return !TextboxOpen(ctx);
     }
 
     /// <summary>
@@ -221,18 +244,7 @@ public sealed partial class CombatHandler : ScreenHandler
     /// </summary>
     private bool MoveCardCursor(ScreenContext ctx, int step)
     {
-        if (_paused || _limitPrompt || _fleePrompt || _previewing || _spellSlot != -2 || _narrator.Ended) return false;
-        var v = ctx.Bridge.Batch(Combat + ".state", Combat + ".gamepad_dicemode", Combat + ".gamepad_buttonmode", Selected + ".skillcard");
-        if (!v[0].AsString().StartsWith("playerturn", StringComparison.Ordinal) || v[1].AsBool() || v[2].AsBool()) return false;
-
-        // A panel card under the cursor focuses its button before A is pressed (seen: the Robot's
-        // Calculate), and the game's own arrows then wrap from the panel to some other card. One
-        // button is just the panel's face and the list goes on; several buttons (jackpot prizes,
-        // the six request dice) are a choice, and the arrows belong to it.
-        if (ctx.State.Focus is { } focused
-            && (v[3].AsString().Length == 0 || focused.RawLabel == "dicebutton" || ctx.State.Buttons.Select(b => b.RawLabel).Distinct().Count() > 1)) return false;
-        if (TextboxOpen(ctx)) return false;
-
+        if (!CardListActive(ctx)) return false;
         var (cards, at) = ListCards(ctx);
         if (at < 0) return false;   // the cursor is on something this list does not know: the game's own keys still work
 

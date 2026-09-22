@@ -93,7 +93,7 @@ Active only while the Dicey Dungeons window has focus.
 | **F11** | Pause menu (Start): continue, options, mods |
 | **Backspace** | Back/Select button |
 | **Tab**, **Shift+Tab** | In battle: next / previous group: enemy cards, enemy status effects, your status effects, your actions |
-| **Page Down**, **Page Up** | In battle: next / previous item of the current group |
+| **Up**, **Down** | In battle: next / previous item of the current group (Left and Right stay on your cards) |
 | **Left Control** | Stops speech |
 
 When the game shows a gamepad button in a prompt, the mod says the key instead
@@ -110,8 +110,8 @@ fight ("Frog shield 3. Blocks the opponent's damage").
 
 Everything else on the board is in four groups. **Tab** and **Shift+Tab** move between them:
 the enemy's cards, the enemy's status effects, your status effects, and your actions (the
-limit break with its charge, a Reunion skill, the Jester's discard, fleeing). **Page Down**
-and **Page Up** move within the group; each item is read with its place ("2 of 3"). The item
+limit break with its charge, a Reunion skill, the Jester's discard, fleeing). **Down** and
+**Up** move within the group (Left and Right stay on your own cards); each item is read with its place ("2 of 3"). The item
 also becomes the current review list, so **Ctrl+Up** reads its details line by line, ending
 with the keywords its text names: a card that says "Do 3 burn damage" gets a "Burn: ..." line
 with the game's own rule for it. The same keyword lines follow your own cards as the arrows

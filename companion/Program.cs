@@ -330,14 +330,12 @@ public static class Program
         Map(Keys.Letter('P'), PadButton.A, NavKey.Path);
 
         // In battle Tab / Shift+Tab move between groups (the enemy's cards, the status effects,
-        // your actions) and Page Down / Page Up between the items of a group. Tab used to hold
-        // the right stick up, which shows the enemy's cards on screen: every card was read in
-        // one go and could not be browsed, and the release handler slept on the key queue, so
-        // the next arrow waited behind it.
+        // your actions); Up and Down move between the items of a group while the card list has
+        // the arrows (CombatHandler.OnKey). Tab used to hold the right stick up, which shows the
+        // enemy's cards on screen: every card was read in one go and could not be browsed, and
+        // the release handler slept on the key queue, so the next arrow waited behind it.
         Map(Keys.Tab, PadButton.A, NavKey.GroupNext);
         _hotkeys.BindHeld(Keys.Tab, () => NavDown(NavKey.GroupPrevious), () => NavUp(NavKey.GroupPrevious), shift: true);
-        Map(Keys.PageDown, PadButton.A, NavKey.ItemNext);
-        Map(Keys.PageUp, PadButton.A, NavKey.ItemPrevious);
 
         // Left Control silences speech, as it does in the screen reader itself; the key still
         // reaches the game and still works as the Control of the review shortcuts.

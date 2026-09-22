@@ -138,10 +138,11 @@ applies. The keyboard hook swallows them, so nothing acts twice. Default map: ar
 d-pad, Enter/Space = A, Escape = B, E = X, R = Y, Q/W = shoulders, F11 = Start,
 Backspace = Back. Space is A everywhere but
 the map (there it recentres the map cursor); comma, period and P exist only for the map and
-never reach the pad. Tab / Shift+Tab and Page Down / Page Up are the mod's own
+never reach the pad. Tab / Shift+Tab are the mod's own
 (`NavKey.GroupNext/GroupPrevious/ItemNext/ItemPrevious`, `CombatGroups.cs`): in battle Tab
-moves between four groups (enemy cards, enemy statuses, your statuses, your actions) and the
-page keys within one; every item fills the item review list with its details plus keyword
+moves between four groups (enemy cards, enemy statuses, your statuses, your actions) and Up /
+Down within one whenever the card list has the arrows (`CardListActive`; Left / Right stay the
+card list, Up / Down used to be their twins); every item fills the item review list with its details plus keyword
 lines (`StatusKeywords`: the status effects behind the icons in the card's raw text, from
 `data/text/statuseffects.csv`, translated by the game). Enemy cards are read from the card
 objects, never the stage (off the preview they are parked over the player's cards). In battle
