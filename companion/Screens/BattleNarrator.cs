@@ -320,9 +320,14 @@ public sealed class BattleNarrator
         // A countdown card comes down as dice land on it. The player put their own dice there and
         // only needs to hear when it is ready; the enemy's dice landing is otherwise invisible
         // (third play-test: "Spiky Potion is ready" came out of nowhere after three dice).
-        foreach (var card in after.Cards.Where(c => c.Countdown > 0))
+        // Copies of one card are paired in order: matching by name alone paired the second copy
+        // with the first, and when it stood lower it "came down" on every poll, forever.
+        var seen = new Dictionary<string, int>();
+        foreach (var card in after.Cards)
         {
-            var was = before.Cards.FirstOrDefault(c => c.Name == card.Name);
+            var copy = seen[card.Name] = seen.GetValueOrDefault(card.Name) + 1;
+            if (card.Countdown <= 0) continue;
+            var was = before.Cards.Where(c => c.Name == card.Name).Skip(copy - 1).FirstOrDefault();
             if (was == null || card.CountdownLeft >= was.CountdownLeft) continue;
             if (isPlayer) { if (card.CountdownLeft <= 0) ctx.SayEvent(Strings.T("battle.card_ready", card.Name)); continue; }
             // The dice just put there, when the game still has them on the card; else the amount.
