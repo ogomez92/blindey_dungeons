@@ -174,6 +174,10 @@ mod did not get the key.
 - **Trade**: you hear what you give and what you get. Enter accepts, Escape refuses.
 - **After a fight**: experience and gold, and on a level up the rewards to choose from.
 - **Character select**: left and right, Enter starts, **R** opens the challenges.
+- **Episode select**: left and right move through the open episodes ("episode 2 of 6").
+  On arrival you hear how many are open and what each locked one needs: episodes 4, 5
+  and 6 open after 2, 3 and 4 wins with that contestant. **W** and **Q** turn to the
+  Extra Episodes page when a mod adds more; F5 repeats the summary.
 - **Pause menu (F11) → Reset progress** is the game's progress editor: **E** unlocks the
   next contestant, Enter marks an episode completed, **R** pressed four times resets all.
 - **Inventory full**: left and right read the cards you could discard, Enter discards one.

@@ -51,7 +51,7 @@ public sealed class SpellbookHandler : ScreenHandler
     private static string Summary(ScreenContext ctx)
     {
         var pages = (ctx.Bridge.Pluck(Book + ".spells", "name") ?? new())
-            .Select((r, i) => Strings.T("spellbook.page", i + 1, r[0].AsString().Length > 0 ? ctx.Translate(r[0].AsString()) : Strings.T("spellbook.empty")));
+            .Select((r, i) => Strings.T("spellbook.page", i + 1, r[0].AsString().Length > 0 ? TextCleanup.Join(ctx.Translate(r[0].AsString()), Double(ctx, i)) : Strings.T("spellbook.empty")));
         var prepared = Prepared(ctx).Where(n => n.Length > 0).Select(ctx.Translate).ToList();
         return Strings.T("spellbook.summary", prepared.Count == 0 ? Strings.T("pack.none") : string.Join(", ", prepared), string.Join("; ", pages));
     }
@@ -98,8 +98,12 @@ public sealed class SpellbookHandler : ScreenHandler
         var name = ctx.Bridge.Eval($"{Book}.spells[{index}].name").AsString();
         if (name.Length == 0 || card.Length == 0) return Strings.T("spellbook.page", index + 1, Strings.T("spellbook.empty"));
         var isPrepared = Prepared(ctx).Contains(name);
-        return TextCleanup.JoinSentences(Strings.T("spellbook.page", index + 1, card), isPrepared ? Strings.T("spellbook.is_prepared") : null);
+        return TextCleanup.JoinSentences(Strings.T("spellbook.page", index + 1, card), Double(ctx, index), isPrepared ? Strings.T("spellbook.is_prepared") : null);
     }
+
+    /// <summary>A double spell's page shows two dice of its number (Spell.requirements has two entries): it takes two dice to cast.</summary>
+    private static string? Double(ScreenContext ctx, int index)
+        => ctx.Bridge.Eval($"{Book}.spells[{index}].requirements.length").AsInt() == 2 ? Strings.T("witch.double", index + 1) : null;
 
     private static string DescribeSlot(ScreenContext ctx)
     {

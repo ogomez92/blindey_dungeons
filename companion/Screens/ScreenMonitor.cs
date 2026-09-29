@@ -48,7 +48,7 @@ public sealed class ScreenMonitor : IDisposable
             Bridge = bridge, Speech = speech, Buffers = buffers, Config = config, Log = log,
             Stage = new StageWatcher(TimeSpan.FromMilliseconds(320)),
         };
-        _handlers = new List<ScreenHandler> { new DungeonHandler(pad), new CombatHandler(pad), new LevelUpHandler(), new BackpackHandler(), new PickupHandler(), new ShopHandler(), new BlacksmithHandler(), new BarterHandler(), new CharacterSelectHandler(), new ProgressEditorHandler(), new ModsHandler(), new SpellbookHandler(), new DeckHandler(), new ChallengeHandler(), new FinaleSelectHandler(), new RemixHandler(), new InventoryFullHandler() };
+        _handlers = new List<ScreenHandler> { new DungeonHandler(pad), new CombatHandler(pad), new LevelUpHandler(), new BackpackHandler(), new PickupHandler(), new ShopHandler(), new BlacksmithHandler(), new BarterHandler(), new CharacterSelectHandler(), new EpisodeSelectHandler(), new ProgressEditorHandler(), new ModsHandler(), new SpellbookHandler(), new DeckHandler(), new ChallengeHandler(), new FinaleSelectHandler(), new RemixHandler(), new InventoryFullHandler() };
         _active = _fallback;
     }
 

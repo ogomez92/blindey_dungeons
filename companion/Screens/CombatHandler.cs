@@ -38,6 +38,10 @@ public sealed partial class CombatHandler : ScreenHandler
     [GeneratedRegex(@"^\d+ (dice|dados)$", RegexOptions.IgnoreCase)]
     private static partial Regex DiceCountText();
 
+    /// <summary>The "(+1)" / "(-1)" after the HUD's dice count, which the narrator says with the count.</summary>
+    [GeneratedRegex(@"^\(\s*(\+|-|plus|minus|más|menos)?\s*\d+\s*\)$", RegexOptions.IgnoreCase)]
+    private static partial Regex DiceBonusText();
+
     [GeneratedRegex(@"^\d+\s*/\s*\d+\s")]
     private static partial Regex HealthLead();
 
@@ -381,7 +385,7 @@ public sealed partial class CombatHandler : ScreenHandler
         if (_cardRects.Any(r => r.Contains(p))) return false;
         if (InFleePanel(ctx, p)) return false;
         if (_narrator.FighterNames.Any(n => StageCleaner.Key(n) == p.Key)) return false;
-        if (DiceCountText().IsMatch(p.Text)) return false;
+        if (DiceCountText().IsMatch(p.Text) || DiceBonusText().IsMatch(p.Text)) return false;
 
         // The rest of the HUD (fighter names, dice counts, the end-turn and enemy-moves
         // prompts) is redrawn every turn. Once per battle is orientation; every turn is noise.
@@ -474,7 +478,13 @@ public sealed partial class CombatHandler : ScreenHandler
         }
 
         if (ctx.State.Focus != null)
-            return PauseMenuOpen(ctx) ? base.DescribeFocus(ctx) : TextCleanup.JoinSentences(base.DescribeFocus(ctx), ButtonDetail(ctx, ctx.State.Focus));
+        {
+            if (PauseMenuOpen(ctx)) return base.DescribeFocus(ctx);
+            var button = TextCleanup.JoinSentences(base.DescribeFocus(ctx), ButtonDetail(ctx, ctx.State.Focus));
+            // "Shocked?" puts an Unshock button on the card: which card it frees is not in its caption.
+            var shock = ctx.Bridge.Batch(Selected + ".shockedsetting", Selected + ".shockedtype");
+            return shock[0].AsInt() > 0 && shock[1].AsString() == "SKILL" ? CardText.Name(ctx, Selected) + ". " + button : button;
+        }
         if (_limitPrompt) return DescribeLimitPrompt(ctx);
         if (_spellSlot != -2) return Strings.T("witch.choose_slot", DescribeSpellSlot(ctx, _spellSlot));
         if (_fleePrompt) return Strings.T("flee.prompt");
@@ -611,6 +621,17 @@ public sealed partial class CombatHandler : ScreenHandler
         var card = new Card(v[0].AsString(), v[1].AsDouble(), v[2].AsDouble(), v[3].AsDouble(), v[4].AsDouble(),
                             v[5].AsBool(true), v[6].AsBool(true), v[7].AsInt(), v[8].AsInt(), v[9].AsInt(), v[10].AsInt(), v[11].AsBool());
 
+        // A shocked or silenced card is covered by its shock panel: the title and what the panel
+        // asks for are all there is to read (the caption "Place a dice to release shock" says less).
+        // The rust counter is not drawn over the panel either (Equipment.hx: completerender).
+        if (card.Shocked > 0)
+        {
+            var covered = new List<string> { CardText.Name(ctx, Selected).TrimEnd('-', ' '), CardText.ShockText(ctx, Selected) };
+            if (card.Weakened) covered.Add(Strings.T("card.weakened"));
+            if (!card.Available || !card.Ready) covered.Add(Strings.T("card.unavailable"));
+            return covered.Where(p => p.Length > 0).ToList();
+        }
+
         // Name and rules text as drawn, from inside the card.
         var rect = new Rect(card.X, card.Y, card.Width, card.Height);
         var slots = CardText.Slots(ctx, Selected);
@@ -651,7 +672,10 @@ public sealed partial class CombatHandler : ScreenHandler
         if (holder == "thiefreunion" && ctx.Bridge.Eval("{Reunion}.thiefcard_created").AsBool()
             && ctx.Bridge.Eval("{Reunion}.thiefcard_selected").AsString().Length == 0) parts.Add(Strings.T("card.enemy_loan_steal"));
 
-        if (card.Shocked > 0) parts.Add(Strings.T("card.shocked"));
+        var locked = CardText.LockedText(ctx, Selected);
+        if (locked.Length > 0) parts.Add(locked);
+        var rust = CardText.RustText(ctx, Selected);
+        if (rust.Length > 0) parts.Add(rust);
         if (card.Weakened) parts.Add(Strings.T("card.weakened"));
         if (!card.Available || !card.Ready) parts.Add(Strings.T("card.unavailable"));
 
@@ -667,7 +691,11 @@ public sealed partial class CombatHandler : ScreenHandler
         => ctx.Bridge.Batch("{Game}.player.name", "{Game}.monster.name").Where(n => n.Exists)
               .Select(n => StageCleaner.Key(ctx.Translate(n.AsString()))).ToHashSet();
 
-    private static bool IsHud(HashSet<string> names, Paragraph p) => names.Contains(p.Key) || DiceCountText().IsMatch(p.Text);
+    private static bool IsHud(HashSet<string> names, Paragraph p) => names.Contains(p.Key) || DiceCountText().IsMatch(p.Text) || TurnLabel().IsMatch(p.Text);
+
+    /// <summary>The HUD's "TURN 1" at the top left, inside the rectangle of a card in the first column (seen on the Robot's Ruby Weapon).</summary>
+    [GeneratedRegex(@"^(turn|turno)\s+\d+$", RegexOptions.IgnoreCase)]
+    private static partial Regex TurnLabel();
 
     /// <summary>
     /// Where the card draws its dice slots. The words printed inside one ("max 3", "even", a
@@ -743,21 +771,51 @@ public sealed partial class CombatHandler : ScreenHandler
     /// simply thrown at the enemy for 1 damage. The panel lists the pages as pictures of dice.
     /// </summary>
     private static List<string> SpellPages(ScreenContext ctx)
-        => (ctx.Bridge.Pluck("{elements.Spellbook}.spells", "name") ?? new()).Select(r => r[0].AsString()).ToList();
+        => SpellPageStates(ctx).Select(p => p.Name).ToList();
+
+    /// <summary>
+    /// A page as drawn (Spell.draw): a double spell (requirements of length 2) shows two tiny
+    /// dice of its number and the first one fades once a dice is placed; a page made
+    /// unavailable this turn (Spellbook.spells_availablethisturn, after a "Burn?" dice) is
+    /// greyed out as "Unavailable" and takes no dice. A blind dice placed on a page is
+    /// drawn as if the page were still empty, so it is not counted either.
+    /// </summary>
+    private sealed record SpellPage(string Name, bool Double, bool FirstPlaced, bool Available);
+
+    private static List<SpellPage> SpellPageStates(ScreenContext ctx)
+    {
+        const string Book = "{elements.Spellbook}";
+        var count = ctx.Bridge.Eval(Book + ".spells.length").AsInt();
+        if (count <= 0) return new();
+        var reads = new List<string>();
+        for (var i = 0; i < count; i++)
+            reads.AddRange(new[] { $"{Book}.spells[{i}].name", $"{Book}.spells[{i}].requirements.length", $"{Book}.spells[{i}].requirementsmatched[0]",
+                                   $"{Book}.spells[{i}].requirementsmatched_usedblinddice[0]", $"{Book}.spells_availablethisturn[{i}]" });
+        var v = ctx.Bridge.Batch(reads);
+        return Enumerable.Range(0, count).Select(i => new SpellPage(v[i * 5].AsString(), v[i * 5 + 1].AsInt() == 2,
+                                                                     v[i * 5 + 2].AsBool() && !v[i * 5 + 3].AsBool(), v[i * 5 + 4].AsBool(true))).ToList();
+    }
 
     private static string DescribeSpellbook(ScreenContext ctx)
     {
-        var pages = SpellPages(ctx).Select((name, i) => name.Length > 0 ? Strings.T("spellbook.page", i + 1, ctx.Translate(name)) : null).Where(p => p != null);
+        var pages = SpellPageStates(ctx).Select((p, i) => p.Name.Length == 0 ? null
+            : Strings.T("spellbook.page", i + 1, TextCleanup.Join(ctx.Translate(p.Name),
+                  !p.Available ? Strings.T("witch.page_unavailable_short")
+                  : p.Double ? (p.FirstPlaced ? Strings.T("witch.double_half", i + 1) : Strings.T("witch.double", i + 1)) : null)))
+            .Where(p => p != null);
         return Strings.T("witch.book", string.Join(", ", pages));
     }
 
     private static string SpellForDice(ScreenContext ctx, int value)
     {
-        var pages = SpellPages(ctx);
-        var name = value >= 1 && value <= pages.Count ? pages[value - 1] : "";
-        return name.Length == 0
-            ? Strings.T("witch.throw")
-            : Strings.T("witch.summons", ctx.Translate(name), CardText.DescriptionByName(ctx, name));
+        var pages = SpellPageStates(ctx);
+        var page = value >= 1 && value <= pages.Count ? pages[value - 1] : null;
+        if (page == null || page.Name.Length == 0) return Strings.T("witch.throw");
+        var name = ctx.Translate(page.Name);
+        if (!page.Available) return Strings.T("witch.page_unavailable", value, name);
+        var summons = Strings.T("witch.summons", name, CardText.DescriptionByName(ctx, page.Name));
+        if (!page.Double) return summons;
+        return page.FirstPlaced ? Strings.T("witch.double_completes", summons) : Strings.T("witch.double_first", value, name);
     }
 
     private int _spellSlot = -2;
@@ -784,8 +842,10 @@ public sealed partial class CombatHandler : ScreenHandler
     {
         var slots = ctx.Bridge.Pluck("{elements.Spellbook}.equipmentslots", "name") ?? new();
         var name = slot >= 0 && slot < slots.Count && slots[slot][0].Exists ? slots[slot][0].AsString() : "";
-        return Strings.T("witch.slot", slot + 1, Math.Max(slots.Count, 1),
-                         name.Length > 0 ? Strings.T("witch.slot_taken", ctx.Translate(name)) : Strings.T("spellbook.empty"));
+        // An upgraded slot says "upgraded" on it and upgrades the spell summoned into it (Spellbook.drawslot, summon).
+        var upgraded = ctx.Bridge.Eval("{elements.Spellbook}.upgradedslots[" + Math.Max(slot, 0) + "]").AsBool();
+        var contents = name.Length > 0 ? Strings.T("witch.slot_taken", ctx.Translate(name)) : Strings.T("spellbook.empty");
+        return Strings.T("witch.slot", slot + 1, Math.Max(slots.Count, 1), upgraded ? TextCleanup.Join(Strings.T("witch.slot_upgraded"), contents) : contents);
     }
 
     // ------------------------------------------------------------------ dice
@@ -845,12 +905,13 @@ public sealed partial class CombatHandler : ScreenHandler
     /// <summary>
     /// Whether any open slot of the card takes a dice of this value: Game.slotcheckvalue's
     /// rules, from the constructor names of elements.DiceSlotType (Equipment.hx). A shocked
-    /// card takes any dice (it unlocks it); a character's panel decides for itself.
+    /// card takes what its shock panel asks for; a character's panel decides for itself.
     /// </summary>
     private static bool DiceFits(ScreenContext ctx, string card, int value)
     {
         var v = ctx.Bridge.Batch(card + ".skillcard", card + ".shockedsetting");
-        if (v[0].AsString().Length > 0 || v[1].AsInt() > 0) return true;
+        if (v[1].AsInt() > 0) return CardText.ShockAccepts(ctx, card, value);
+        if (v[0].AsString().Length > 0) return true;
         var slots = ctx.Bridge.Dump(card + ".slots").Select(s => s.Value.TypeName).ToList();
         var filled = ctx.Bridge.Dump(card + ".assigneddice").Select(d => d.Value.Exists).ToList();
         var open = 0;
@@ -883,13 +944,17 @@ public sealed partial class CombatHandler : ScreenHandler
 
     private static string DescribeHoverDice(ScreenContext ctx)
     {
-        var v = ctx.Bridge.Batch(Hover + ".basevalue", Hover + ".modifier", Hover + ".locked", Hover + ".frozen", Hover + ".burn", Hover + ".blind");
+        var v = ctx.Bridge.Batch(Hover + ".basevalue", Hover + ".modifier", Hover + ".locked", Hover + ".frozen", Hover + ".burn", Hover + ".blind",
+                                 Hover + ".priority", Hover + ".alternateburn", "{Rules}.burningdicecost");
         if (!v[0].Exists) return "";
         // A blind dice hides its face from the player; saying the number would be cheating.
         var parts = new List<string> { v[5].AsBool() ? Strings.T("dice.hidden") : Strings.T("dice.one", v[0].AsInt() + v[1].AsInt()) };
         if (v[2].AsBool()) parts.Add(Strings.T("dice.locked"));
+        if (v[6].AsBool()) parts.Add(Strings.T("dice.priority"));
         if (v[3].AsBool()) parts.Add(Strings.T("dice.frozen"));
-        if (v[4].AsBool()) parts.Add(Strings.T("dice.burning"));
+        // "Cost 2 health" is drawn under a burning dice (Dice.hx).
+        if (v[4].AsBool()) parts.Add(Strings.T("dice.burning_cost", v[8].AsInt(2)));
+        if (v[7].AsBool()) parts.Add(Strings.T("dice.altburn"));
         return string.Join(", ", parts);
     }
 

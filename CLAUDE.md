@@ -368,11 +368,32 @@ it from the game once he has none; the Warrior's cards need a second A to fire o
 use slot type COMBINATION, whose dice come from `elements.Combination.getstring(card)`.
 Names tagged by level packs ("Bump@reunionspacemarine") are translated by the part before @.
 
+What is drawn and now read (audit of the published source, 2026-09-29, each verified live):
+- **Covered cards** (`CardText.ShockText`): `shockedsetting`, `shockedtype`, `shocked_needstotal`,
+  `shocked_remainingcountdown`, `shocked_assigneddice`. NORMAL/EVEN/ODD/REQUIREn = shock (the type
+  follows `Rules.shocktype`), setting 2 = Silence (two dice), SKILL = "Shocked?" (the game registers
+  an "Unshock, lose 3 hp" button; the mod prefixes the card's name), COUNTDOWN = "Poison?",
+  MUSTEQUAL = two dice to a total. `DiceFits` follows the shock slot. A covered card is read as
+  name + requirement only: the caption and the rust counter are not drawn over the panel.
+- **Rust** (`totalusesremaining`, `Rules.inventor_equipmentrust`): uses left, > 12 drawn blank;
+  1 -> -1 is "X rusted away".
+- **Robot locks** (`locked`, `unlocked` = `Fighter.roll_totaldice`, `unlockedthisturn`): dice rolled
+  this turn, not the CPU total. The HUD hides the dice count when `usecpuinsteadofdice`.
+- **Dice**: `alternateburn` ("Burn?"), `priority` ("Locked?", must be used first),
+  `Rules.burningdicecost` (the "Cost 2" under a burning dice).
+- **Statuses** are read by `_displayvalue` (what the icon shows): spent statuses keep showing 1 until
+  cleanup, "Locked?" keeps counting priority dice at value 0.
+- **HUD**: `hassuper` ("Super Frog"), `dice` + `extradice` + `bonusdice` ("x2 (+1)"), and a covered
+  health bar (statuses `alternate_blind`, `cannotseeenemyhealth`: "Blind", "???") is never spoken.
+- **Witch**: `Spell.requirements` (two entries = double spell), `requirementsmatched[0]` (not
+  counted when `requirementsmatched_usedblinddice`), `Spellbook.spells_availablethisturn`
+  ("Unavailable", dice refused), `Spellbook.upgradedslots`.
+
 Other screens added late: `RemixHandler` (`Remixstate.remixoptions`, `highlightedremix`,
 `previewmode` when opened from the map with X), `FinaleSelectHandler` (`charlist`,
 `characterselection`), `InventoryFullHandler`, and a generic rule in `ScreenHandler`:
 several buttons with the same caption in a row each read the text in their column first.
-`DeckHandler` also serves `ViewParty` and `ViewTraining`; `BlacksmithHandler` also serves
+`EpisodeSelectHandler` (`Episodestate.selecteddoor`, `episodespage`/`totalpages`, `episodeavailable[level-1]`, `getepisodebehinddoor(i)` = episode of level page*6+i+1, `character.name`): locked doors are skipped by the game's cursor, so the entry names them with what opens them. From `ProgressTracking.isunlocked` in the exe: episodes 2-3 need `episodes` (five contestants played), episodes 4/5/6 need `<char>_ateliminationround`/`_atparalleluniverse`/`_atremix` = `numepisodeswon(char) >= 2/3/4` (per contestant). The "Extra Episodes" page exists only when a mod gives a contestant more than six; RB/LB (W/Q) turn it. `DeckHandler` also serves `ViewParty` and `ViewTraining`; `BlacksmithHandler` also serves
 `states.Copyshop`.
 
 Test shortcuts that froze the game (never the mod): quickstart `enemy=Jester` (native
@@ -382,6 +403,12 @@ by hand, quickstart `character=Bear`. Any node type can be made with
 `floor[k].updatenodedata(node, {elements.GraphNodeData}.createcopyshop())` and friends; a
 full inventory with `states.PickupEquipment.spaceinequipment/spaceinbackpack = false`; late
 episodes by editing a *test* save so every `episode_*_win` is 1.
+**Crashes caused by tests, not the mod:** writing `burn = true` on a dice (its burn text graphic
+is null, Dice.hx 539) or `shockedsetting` on a card (EquipmentPanel.drawshock). Go through the game:
+`{Game}.player.addstatus("fire", 1)` during the *enemy's* turn (statuses added on your own turn
+are removed at its end), `equipment[i].animate("silence" | "shock" | "alternate_shock")`, and
+`equipment[i].create("Ruby Weapon")` to turn a card into another. A crash leaves a "Dicey
+Dungeons crashed :(" box and a report in `<game>\log\errors`.
 
 Input facts found last: in **mouse control mode** (at launch, after any mouse movement)
 the first press of Start is swallowed, so `ScreenMonitor.WakeGamepadMode` calls

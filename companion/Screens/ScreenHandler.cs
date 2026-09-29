@@ -157,6 +157,10 @@ public class ScreenHandler
                 if (spokeText && !RecentInput(ctx)) ctx.SayAfterEvents(text); else ctx.Say(text, interrupt: RecentInput(ctx));
                 ctx.FocusItem(FocusLines(ctx, text));
             }
+            // Focus left every button (a battle card without one): coming back to the same
+            // caption is a new arrival, not that button sliding somewhere (seen: a card's
+            // Unshock button went silent the second time the cursor reached it).
+            else _announcedLabel = "";
         }
         else
         {

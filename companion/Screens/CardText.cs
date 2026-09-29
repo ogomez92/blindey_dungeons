@@ -104,6 +104,7 @@ public static class CardText
         {
             if (slots[i] == "DOUBLES") continue;
             if (slots[i].StartsWith("FREE") || slots[i].StartsWith("SPARE")) continue;   // not a requirement the player fills
+            if (slots[i].StartsWith("LOCKED")) continue;   // the Robot's locked card: said by LockedText
             var word = SlotWord(slots[i], v[0].AsInt());
             if (slots[i] == "COMBINATION")
             {
@@ -121,7 +122,7 @@ public static class CardText
     }
 
     /// <summary>Names follow elements.DiceSlotType, read from the published Equipment.hx.</summary>
-    private static string SlotWord(string slot, int countdownLeft)
+    public static string SlotWord(string slot, int countdownLeft = 0)
     {
         if (slot == "COUNTDOWN") return Strings.T("slot.COUNTDOWN", countdownLeft);
         if (Strings.Has("slot." + slot)) return Strings.T("slot." + slot);
@@ -135,6 +136,68 @@ public static class CardText
         return slot.ToLowerInvariant();
     }
 
+    /// <summary>
+    /// A shocked or silenced card is covered by a panel with slots of its own
+    /// (Equipment.positionshockslots). The caption says "Place a dice", but the slot is a
+    /// picture that may ask for an even, odd or exact number (Rules.shocktype), two dice
+    /// (Silence), 3 health (Parallel Universe's "Shocked?", slot type SKILL) or a countdown
+    /// that poisons at the end of the turn (Parallel Universe's "Poison?").
+    /// </summary>
+    public static string ShockText(ScreenContext ctx, string card)
+    {
+        var v = ctx.Bridge.Batch(card + ".shockedsetting", card + ".shockedtype", card + ".shocked_needstotal", card + ".shocked_remainingcountdown");
+        var setting = v[0].AsInt();
+        if (setting <= 0) return "";
+        var type = v[1].AsString();
+        var placed = ctx.Bridge.Dump(card + ".shocked_assigneddice").Count(d => d.Value.Exists);
+        var text = type switch
+        {
+            "SKILL" => Strings.T("shock.hp"),
+            "COUNTDOWN" => Strings.T("shock.poison", v[3].AsInt()),
+            "MUSTEQUAL" => Strings.T("shock.total", v[2].AsInt()),
+            _ when setting >= 2 => Strings.T("shock.silenced", type is "" or "NORMAL" ? Strings.T("shock.two_dice") : Strings.T("shock.two_dice_each", SlotWord(type))),
+            _ => Strings.T("shock.needs", type is "" or "NORMAL" ? Strings.T("shock.a_dice") : SlotWord(type)),
+        };
+        return placed > 0 && type is not ("SKILL" or "COUNTDOWN") ? text + ", " + Strings.T("shock.placed", placed) : text;
+    }
+
+    /// <summary>Whether a dice of this value can go on a shocked card's panel (the slot types above).</summary>
+    public static bool ShockAccepts(ScreenContext ctx, string card, int value)
+    {
+        var type = ctx.Bridge.Eval(card + ".shockedtype").AsString();
+        if (type == "SKILL") return false;
+        if (type is "" or "NORMAL" or "COUNTDOWN" or "MUSTEQUAL") return true;
+        if (type == "EVEN") return value % 2 == 0;
+        if (type == "ODD") return value % 2 != 0;
+        return !type.StartsWith("REQUIRE") || !int.TryParse(type[7..], out var n) || value == n;
+    }
+
+    /// <summary>
+    /// The Inventor's rust (Rules.inventor_equipmentrust): tiny dice at a card's top right
+    /// count the uses left (Equipment.totalusesremaining), pulsing at the last one; more than
+    /// 12 is drawn as a blank dice. At 0 uses the card breaks into a new gadget.
+    /// </summary>
+    public static string RustText(ScreenContext ctx, string card)
+    {
+        var v = ctx.Bridge.Batch(card + ".totalusesremaining", card + ".skillcard", card + ".slots.length");
+        var uses = v[0].AsInt();
+        if (uses <= 0) return "";
+        if (v[1].AsString() is not ("inventor" or "skillskillcard") && v[2].AsInt() == 0) return "";
+        return uses == 1 ? Strings.T("rust.last") : uses > 12 ? Strings.T("rust.many") : Strings.T("rust.uses", uses);
+    }
+
+    /// <summary>
+    /// The Robot's locked cards (slot LOCKED2-7, "Roll any 4 dice to activate"): the card stays
+    /// shut until that many dice have been rolled this turn (Fighter.checklockedequipment writes
+    /// roll_totaldice into Equipment.unlocked, drawn against Equipment.locked by drawlockedslot).
+    /// </summary>
+    public static string LockedText(ScreenContext ctx, string card)
+    {
+        var v = ctx.Bridge.Batch(card + ".locked", card + ".unlocked", card + ".unlockedthisturn");
+        if (v[0].AsInt() <= 0 || v[2].AsBool()) return "";
+        return Strings.T("robot.locked", v[0].AsInt(), v[1].AsInt());
+    }
+
     /// <summary>Name, rules text, what it takes, and how much room it needs in the backpack.</summary>
     public static string Full(ScreenContext ctx, string card, bool withSize = false)
     {
@@ -145,6 +208,8 @@ public static class CardText
         if (description.Length > 0) parts.Add(description);
         var slots = Slots(ctx, card);
         if (slots.Length > 0) parts.Add(slots);
+        var locked = ctx.Bridge.Eval(card + ".locked").AsInt();
+        if (locked > 0) parts.Add(Strings.T("slot.LOCKED", locked));
         if (withSize) parts.Add(Strings.T(ctx.Bridge.Eval(card + ".size").AsInt() >= 2 ? "card.size2" : "card.size1"));
         return string.Join(". ", parts);
     }

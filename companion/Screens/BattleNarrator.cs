@@ -34,10 +34,20 @@ public sealed class BattleNarrator
         public string BaseName { get; init; } = Name;
         public bool Weakened { get; init; }
         public bool Shocked { get; init; }
+        /// <summary>What covers it (Equipment.shockedtype / shockedsetting): shock, silence (two dice), "Shocked?" (SKILL), "Poison?" (COUNTDOWN).</summary>
+        public string ShockKind { get; init; } = "";
+        /// <summary>Equipment.totalusesremaining under the Inventor's rust: -1 once the card has rusted away.</summary>
+        public int RustUses { get; init; }
     }
 
     private sealed record DiceInfo(int Value, bool Locked, bool Frozen, bool Burning, bool Blind, string On, bool Consumed = false)
     {
+        /// <summary>Parallel Universe's "Burn?": the card it is used on is disabled this turn and next (Dice.alternateburn).</summary>
+        public bool AltBurning { get; init; }
+        /// <summary>Parallel Universe's "Locked?": must be used before any other dice (Dice.priority).</summary>
+        public bool Priority { get; init; }
+        /// <summary>What a burning dice costs to use, drawn under it ("Cost 2 health", Rules.burningdicecost).</summary>
+        public int BurnCost { get; init; }
         /// <summary>Still in the player's hand: not on a card and not used up (Dice.available, locked ones included).</summary>
         public bool Free => On.Length == 0 && !Consumed;
     }
@@ -46,6 +56,12 @@ public sealed class BattleNarrator
     {
         public string Name = "";
         public int Hp, MaxHp, Level, Gold, Limit, LimitMax;
+        /// <summary>The health bar is replaced by "Blind" or "???" (statuses alternate_blind, cannotseeenemyhealth; Fighter.hx draw).</summary>
+        public bool HealthHidden;
+        /// <summary>The HUD's "[dice]x3 (+1)": Fighter.dice and extradice + bonusdice.</summary>
+        public int DiceCount, DiceBonus;
+        /// <summary>The Robot's HUD shows the CPU instead of the dice count (Fighter.usecpuinsteadofdice).</summary>
+        public bool UsesCpu;
         public bool DeckStyle;            // the Jester: Fighter.layout == DECK, equipment is a hand of cards
         public int CpuTotal, CpuTarget;   // the Robot: Fighter.roll_total against roll_target
         public bool CpuError;
@@ -115,29 +131,39 @@ public sealed class BattleNarrator
     private FighterState? Read(ScreenContext ctx, string f)
     {
         var v = ctx.Bridge.Batch(f + ".name", f + ".hp", f + ".maxhp", f + ".level", f + ".gold", f + ".limitvalue", f + ".limitmax",
-                                 f + ".roll_total", f + ".roll_target", f + ".roll_error", f + ".layout");
+                                 f + ".roll_total", f + ".roll_target", f + ".roll_error", f + ".layout", f + ".hassuper",
+                                 f + ".dice", f + ".extradice", f + ".bonusdice", "{Rules}.burningdicecost", f + ".usecpuinsteadofdice");
         if (!v[0].Exists) return null;
+        var fighterName = ctx.Translate(v[0].AsString());
         var s = new FighterState
         {
-            Name = ctx.Translate(v[0].AsString()), Hp = v[1].AsInt(), MaxHp = v[2].AsInt(), Level = v[3].AsInt(),
+            // The HUD prints a super enemy as "Super Frog" (Fighter.hx, Locale "Super {enemyname}").
+            Name = v[11].AsBool() ? Strings.T("battle.super", fighterName) : fighterName,
+            Hp = v[1].AsInt(), MaxHp = v[2].AsInt(), Level = v[3].AsInt(),
             Gold = v[4].AsInt(), Limit = v[5].AsInt(), LimitMax = v[6].AsInt(),
             CpuTotal = v[7].AsInt(), CpuTarget = v[8].AsInt(), CpuError = v[9].AsBool(),
             DeckStyle = v[10].TypeName == "DECK",
+            DiceCount = v[12].AsInt(), DiceBonus = v[13].AsInt() + v[14].AsInt(), UsesCpu = v[16].AsBool(),
         };
+        var burnCost = v[15].AsInt(2);
 
-        var statuses = ctx.Bridge.Pluck(f + ".status", "name", "value", "invisible") ?? new();
+        // _displayvalue is what the icon shows. It differs from value for Parallel Universe's
+        // "Locked?", which keeps counting the dice still to be used first at value 0 (StatusApply.hx).
+        var statuses = ctx.Bridge.Pluck(f + ".status", "name", "value", "invisible", "_displayvalue", "type") ?? new();
         for (var i = 0; i < statuses.Count; i++)
         {
             var r = statuses[i];
+            if (r[1].AsInt() > 0 && r[4].AsString() is "alternate_blind" or "cannotseeenemyhealth") s.HealthHidden = true;
+            var shown = r[3].Exists ? r[3].AsInt() : r[1].AsInt();
             // A status spent this turn (burn moved onto a dice) stays in the list at zero until cleanup.
-            if (!r[0].Exists || r[2].AsBool() || r[1].AsInt() <= 0) continue;
+            if (!r[0].Exists || r[2].AsBool() || (r[1].AsInt() <= 0 && shown <= 0)) continue;
             var index = i;
-            var description = Detail($"{f}:status:{r[0].AsString()}:{r[1].AsInt()}", () => string.Join(" ",
+            var description = Detail($"{f}:status:{r[0].AsString()}:{shown}", () => string.Join(" ",
                 ctx.Bridge.Dump($"{f}.status[{index}].description").Select(l => StageCleaner.Clean(l.Value.AsString())).Where(l => l.Length > 0)));
-            s.Statuses.Add(new StatusInfo(StatusName(ctx, r[0].AsString()), r[1].AsInt(), description));
+            s.Statuses.Add(new StatusInfo(StatusName(ctx, r[0].AsString()), Math.Max(shown, 1), description));
         }
 
-        var cards = ctx.Bridge.Pluck(f + ".equipment", "name", "ready", "remainingcountdown", "countdown", "timesused", "availablethisturn", "namemodifier", "skillcard", "ty", "show", "shockedsetting", "reducecountdownby") ?? new();
+        var cards = ctx.Bridge.Pluck(f + ".equipment", "name", "ready", "remainingcountdown", "countdown", "timesused", "availablethisturn", "namemodifier", "skillcard", "ty", "show", "shockedsetting", "reducecountdownby", "shockedtype", "totalusesremaining") ?? new();
         for (var i = 0; i < cards.Count; i++)
         {
             var r = cards[i];
@@ -167,13 +193,22 @@ public sealed class BattleNarrator
                 BaseName = r[7].AsString().Length > 0 ? name : CardText.DecorateName(ctx, r[0].AsString(), r[6].AsString().Replace("-", "")),
                 Weakened = r[6].AsString().Contains('-'),
                 Shocked = r[10].AsInt() > 0,
+                ShockKind = r[10].AsInt() <= 0 ? "" : r[12].AsString() switch
+                {
+                    "COUNTDOWN" => "battle.card_poisoned",
+                    "SKILL" => "battle.card_shocked_alt",
+                    _ when r[10].AsInt() >= 2 => "battle.card_silenced",
+                    _ => "battle.card_shocked",
+                },
+                RustUses = r[13].AsInt(),
             });
         }
 
-        foreach (var r in ctx.Bridge.Pluck(f + ".dicepool", "basevalue", "modifier", "locked", "frozen", "burn", "blind", "assigned.name", "consumed") ?? new())
+        foreach (var r in ctx.Bridge.Pluck(f + ".dicepool", "basevalue", "modifier", "locked", "frozen", "burn", "blind", "assigned.name", "consumed", "alternateburn", "priority") ?? new())
             if (r[0].Exists)
                 s.Dice.Add(new DiceInfo(r[0].AsInt() + r[1].AsInt(), r[2].AsBool(), r[3].AsBool(), r[4].AsBool(), r[5].AsBool(),
-                                        r[6].Exists ? ctx.Translate(r[6].AsString()) : "", r[7].AsBool()));
+                                        r[6].Exists ? ctx.Translate(r[6].AsString()) : "", r[7].AsBool())
+                           { AltBurning = r[8].AsBool(), Priority = r[9].AsBool(), BurnCost = burnCost });
         return s;
     }
 
@@ -196,7 +231,15 @@ public sealed class BattleNarrator
 
     // ------------------------------------------------------------------ announcements
 
-    private static string Health(FighterState f) => Strings.T("battle.health", f.Hp, f.MaxHp);
+    /// <summary>A health bar the game has covered ("Blind", "???") is not read out either.</summary>
+    private static string Health(FighterState f) => f.HealthHidden ? Strings.T("battle.health_hidden") : Strings.T("battle.health", f.Hp, f.MaxHp);
+
+    /// <summary>"3 dice, 1 extra": the HUD's "[dice]x3 (+1)" beside the name.</summary>
+    private static string DiceCount(FighterState f)
+        => f.UsesCpu ? ""
+         : f.DiceBonus > 0 ? Strings.T("battle.dice_bonus", f.DiceCount, f.DiceBonus)
+         : f.DiceBonus < 0 ? Strings.T("battle.dice_penalty", f.DiceCount, -f.DiceBonus)
+         : Strings.T("battle.dice_count", f.DiceCount);
 
     private void AnnounceStart(ScreenContext ctx, FighterState player, FighterState enemy)
     {
@@ -282,9 +325,19 @@ public sealed class BattleNarrator
             return;
         }
 
+        // With the bar covered the floating damage number is still drawn, but not what is left.
         var delta = after.Hp - before.Hp;
-        if (delta < 0) ctx.SayEvent(Strings.T(isPlayer ? "battle.you_hurt" : "battle.hurt", who, -delta, after.Hp, after.MaxHp));
+        if (after.HealthHidden)
+        {
+            if (delta < 0) ctx.SayEvent(Strings.T(isPlayer ? "battle.you_hurt_hidden" : "battle.hurt_hidden", who, -delta));
+            else if (delta > 0) ctx.SayEvent(Strings.T(isPlayer ? "battle.you_heal_hidden" : "battle.heal_hidden", who, delta));
+        }
+        else if (delta < 0) ctx.SayEvent(Strings.T(isPlayer ? "battle.you_hurt" : "battle.hurt", who, -delta, after.Hp, after.MaxHp));
         else if (delta > 0) ctx.SayEvent(Strings.T(isPlayer ? "battle.you_heal" : "battle.heal", who, delta, after.Hp, after.MaxHp));
+
+        // Extra or fewer dice next turn change the HUD's "[dice]x3 (+1)" beside the name.
+        if (!after.UsesCpu && (after.DiceCount != before.DiceCount || after.DiceBonus != before.DiceBonus))
+            ctx.SayEvent(who + ": " + DiceCount(after));
 
         // The Robot asks for dice one at a time; the running total against the CPU target decides
         // between carrying on, a jackpot (exactly the target) and an error (over it).
@@ -355,7 +408,9 @@ public sealed class BattleNarrator
             var was = wasCards.FirstOrDefault(c => c.BaseName == card.BaseName);
             if (was == null) continue;
             wasCards.Remove(was);
-            if (card.Shocked && !was.Shocked) ctx.SayEvent(Strings.T("battle.card_shocked", who, card.BaseName));
+            if (card.Shocked && !was.Shocked) ctx.SayEvent(Strings.T(card.ShockKind, who, card.BaseName));
+            // Its last use spent, a rusting card fails with the "error" animation and is gone (Equipment.hx).
+            if (was.RustUses == 1 && card.RustUses == -1) ctx.SayEvent(Strings.T("battle.rusted", card.BaseName));
             if (card.Weakened && !was.Weakened) ctx.SayEvent(Strings.T("battle.card_weakened", who, card.BaseName));
             if (!card.Weakened && was.Weakened) ctx.SayEvent(Strings.T("battle.card_restored", who, card.BaseName));
         }
@@ -399,11 +454,15 @@ public sealed class BattleNarrator
 
     private static string Describe(DiceInfo d)
     {
-        var parts = new List<string> { d.Blind ? Strings.T("dice.hidden") : d.Value.ToString() };
-        if (d.Locked) parts.Add(Strings.T("dice.locked"));
-        if (d.Frozen) parts.Add(Strings.T("dice.frozen"));
-        if (d.Burning) parts.Add(Strings.T("dice.burning"));
-        return string.Join(" ", parts);
+        // "3 (must be used first, burning?)": in a list of dice the states stay with their dice.
+        var states = new List<string>();
+        if (d.Locked) states.Add(Strings.T("dice.locked"));
+        if (d.Priority) states.Add(Strings.T("dice.priority"));
+        if (d.Frozen) states.Add(Strings.T("dice.frozen"));
+        if (d.Burning) states.Add(Strings.T("dice.burning_cost", d.BurnCost));
+        if (d.AltBurning) states.Add(Strings.T("dice.altburn"));
+        var value = d.Blind ? Strings.T("dice.hidden") : d.Value.ToString();
+        return states.Count == 0 ? value : value + " (" + string.Join(", ", states) + ")";
     }
 
     private static string Describe(CardInfo c)
@@ -425,6 +484,7 @@ public sealed class BattleNarrator
         // Only what can still be played: a dice on a card or used up is no longer the player's to place.
         ctx.Buffers.Get(BufferManager.Dice).Set(player.Dice.Where(d => d.Free).Select(Describe));
         var you = new List<string> { player.Name, Health(player) };
+        if (!player.UsesCpu) you.Add(DiceCount(player));
         if (player.LimitMax > 0) you.Add(Strings.T("battle.limit", player.Limit, player.LimitMax));
         if (player.CpuTarget > 0) you.Add(Strings.T("robot.cpu", player.CpuTotal, player.CpuTarget));
         you.AddRange(player.Statuses.Select(DescribeFully));
@@ -467,7 +527,7 @@ public sealed class BattleNarrator
     public string DescribeBoth()
     {
         if (_player == null || _enemy == null) return "";
-        string One(string who, FighterState f) => TextCleanup.Join(who, Health(f),
+        string One(string who, FighterState f) => TextCleanup.Join(who, Health(f), DiceCount(f),
             f.Statuses.Count > 0 ? string.Join(", ", f.Statuses.Select(Describe)) : null);
         return One(Strings.T("battle.you"), _player)
              + (_player.LimitMax > 0 ? ", " + Strings.T("battle.limit", _player.Limit, _player.LimitMax) : "")
