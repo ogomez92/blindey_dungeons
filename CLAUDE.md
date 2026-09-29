@@ -492,11 +492,15 @@ Intel Macs.
 
 ## 10. Releases and the installer
 
-Repository: `ogomez92/blindey_dungeons`. A `v*.*.*` tag matching `<Version>` in
-`companion/DiceyA11y.csproj` runs `.github/workflows/release.yml`, which calls
-`tools/package_release.ps1` on a Windows runner and attaches the zip plus
-`installer/DiceyDungeonsAccessibilityInstaller.exe`. "Run workflow" by hand builds the zip
-as an artifact without releasing.
+Repository: `gomods1/dicey` (private). Its root is the folder *above* this one: it holds
+`DiceyA11y/` and the ignored `game_src/`; `.gitignore` sits there too, and its rules are
+written `DiceyA11y/...`. (Until 2026-09-29 this folder was its own repo,
+`ogomez92/blindey_dungeons`, and then a submodule; the README's download link and the
+installer still point at that repo's releases.) A `v*.*.*` tag matching `<Version>` in
+`companion/DiceyA11y.csproj` runs `.github/workflows/release.yml` at the repo root, which
+works inside `DiceyA11y/`, calls `tools/package_release.ps1` on a Windows runner and
+attaches the zip plus `installer/DiceyDungeonsAccessibilityInstaller.exe`. "Run workflow" by
+hand builds the zip as an artifact without releasing.
 
 - **The runner has no game.** `bridge/build.ps1` then builds from the committed
   `bridge/lime_exports.txt` (export names only); with the game present it regenerates that
