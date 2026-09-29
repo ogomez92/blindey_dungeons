@@ -495,8 +495,9 @@ Intel Macs.
 Repository: `gomods1/dicey` (private). Its root is the folder *above* this one: it holds
 `DiceyA11y/` and the ignored `game_src/`; `.gitignore` sits there too, and its rules are
 written `DiceyA11y/...`. (Until 2026-09-29 this folder was its own repo,
-`ogomez92/blindey_dungeons`, and then a submodule; the README's download link and the
-installer still point at that repo's releases.) A `v*.*.*` tag matching `<Version>` in
+`ogomez92/blindey_dungeons`, and then a submodule; installers built before 2026-09-29 still
+fetch from there.) The installer and the README fetch releases from `gomods1/dicey` through
+the unauthenticated GitHub API, which only answers for a public repo. A `v*.*.*` tag matching `<Version>` in
 `companion/DiceyA11y.csproj` runs `.github/workflows/release.yml` at the repo root, which
 works inside `DiceyA11y/`, calls `tools/package_release.ps1` on a Windows runner and
 attaches the zip plus `installer/DiceyDungeonsAccessibilityInstaller.exe`. "Run workflow" by

