@@ -35,12 +35,15 @@ public static class Program
     private static int _floor = -1;
     private static int _turn = -1;
     private static bool _modSeen;
+    /// <summary>Started by the bridge (the game came up without us): the console is minimized, nobody reads it.</summary>
+    private static bool _startedByGame;
 
     public static int Main(string[] args)
     {
         try { Console.Title = "Dicey Dungeons Accessibility"; } catch { /* no console: the Mac app */ }
 
         if (args.Contains("--selftest")) return SelfTest();
+        _startedByGame = args.Contains("--started-by-game");
 
         var configPath = ArgValue(args, "--config") ?? Config.DefaultPath;
         var config = Config.Load(configPath);
@@ -50,6 +53,7 @@ public static class Program
         var dataDir = Config.DataDirectory;   // baseDir on Windows; outside the app bundle on macOS
         _log = new EventLog(Path.Combine(dataDir, "diceya11y.log"), echoToConsole: true);
         _log.Write($"DiceyA11y starting. Config: {configPath}");
+        if (_startedByGame) _log.Write("Started by the bridge: the game was launched without the mod (Steam's Play button without launch options?).");
 
         _buffers = new BufferManager(config.MaxEventBuffer);
         _speech = new ScreenReaderOutput(config, _log.Write);
@@ -419,6 +423,19 @@ public static class Program
             NavUp(NavKey.GroupNext);
             return "ok";
         }
+        // "press Right 40": a key on the keyboard hook's own path (its queue and ordering), held
+        // that long, without waiting for the handler. Several in a row are a fast typist.
+        if (parts.Length == 2 && parts[0] == "press")
+        {
+            var a = parts[1].Split(' ');
+            var vk = a[0] switch { "Left" => Keys.Left, "Right" => Keys.Right, "Up" => Keys.Up, "Down" => Keys.Down, "Enter" => Keys.Enter, "Escape" => Keys.Escape, "Tab" => Keys.Tab, _ => 0 };
+            if (vk == 0) return "unknown key";
+            var hold = a.Length > 1 ? int.Parse(a[1]) : 40;
+            _hotkeys.OnKey(vk, true, () => (false, false, false));
+            Thread.Sleep(hold);
+            _hotkeys.OnKey(vk, false, () => (false, false, false));
+            return "ok";
+        }
         if (line == "stop") { _speech.StopSpeech(); return "ok"; }
         if (parts.Length == 2 && parts[0] == "cursor")
             return parts[1] switch
@@ -520,7 +537,7 @@ public static class Program
     private static void Pause()
     {
         // The Mac app has no console: give the spoken error time to finish instead.
-        if (Console.IsInputRedirected)
+        if (Console.IsInputRedirected || _startedByGame)
         {
             if (OperatingSystem.IsMacOS()) Mac.MacNative.dm_main_loop_run(10);
             else Thread.Sleep(10000);

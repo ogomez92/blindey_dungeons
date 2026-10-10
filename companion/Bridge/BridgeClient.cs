@@ -118,6 +118,7 @@ public sealed class BridgeClient : IDisposable
     private readonly object _scopeLock = new();
     private Dictionary<string, string>? _cache;
     private int _cacheThread;
+    private string? _scopeKey;
     // One learned list per key: the poll's and a key press's scopes alternate, and a single
     // list made each wipe the other's (every poll after an arrow key then cost 600 ms).
     private readonly Dictionary<string, List<string>> _learned = new();
@@ -158,21 +159,26 @@ public sealed class BridgeClient : IDisposable
             _asked.Clear();
             Missed.Clear();
             _cacheThread = Environment.CurrentManagedThreadId;
+            _scopeKey = learnKey;
         }
-        if (learnKey != null)
-        {
-            List<string> known;
-            lock (_scopeLock) known = _learned.TryGetValue(learnKey, out var list) ? list : new List<string>();
-            Warm(known.Select(k => { var tab = k.IndexOf('\t'); return (k[..tab], k[(tab + 1)..]); }));
-        }
+        WarmLearned(learnKey);
         return new Scope(() =>
         {
             lock (_scopeLock)
             {
                 if (learnKey != null) _learned[learnKey] = _asked.ToList();
                 _cache = null;
+                _scopeKey = null;
             }
         });
+    }
+
+    private void WarmLearned(string? learnKey)
+    {
+        if (learnKey == null) return;
+        List<string> known;
+        lock (_scopeLock) known = _learned.TryGetValue(learnKey, out var list) ? list.ToList() : new List<string>();
+        Warm(known.Select(k => { var tab = k.IndexOf('\t'); return (k[..tab], k[(tab + 1)..]); }));
     }
 
     /// <summary>Sends these reads together (one frame) so the calls that follow are already answered.</summary>
@@ -197,6 +203,24 @@ public sealed class BridgeClient : IDisposable
     }
 
     public void WarmBatch(params string[] expressions) => Warm(new[] { ("batch", string.Join(Unit, expressions)) });
+
+    /// <summary>Drops this thread's remembered reads: the next read of a value that is still changing (a cursor being waited on) goes to the game.</summary>
+    public void ForgetReads()
+    {
+        var cache = _cache;
+        if (cache != null && _cacheThread == Environment.CurrentManagedThreadId) cache.Clear();
+    }
+
+    /// <summary>
+    /// Drops this thread's remembered reads and sends again, together, the ones the scope is
+    /// expected to make: after waiting on the game mid-scope, what follows still costs one frame.
+    /// </summary>
+    public void RefreshReads()
+    {
+        if (_cache == null || _cacheThread != Environment.CurrentManagedThreadId) return;
+        ForgetReads();
+        WarmLearned(_scopeKey);
+    }
 
     /// <summary>Raw request. Returns "!..." on any failure; never throws.</summary>
     public string Request(string command, string argument = "", string? extra = null, int timeoutMs = 3000)

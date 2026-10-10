@@ -267,10 +267,34 @@ public sealed class ScreenMonitor : IDisposable
             if (list.Any(b => b.RawLabel == raw && Math.Abs(b.X - x) < 80 && Math.Abs(b.Y - y) < 80)) continue;
             list.Add(new NavButton(raw, _ctx.Translate(raw), x, y));
         }
-        // Reading order. Buttons under cards of different heights sit at staggered heights
-        // (1381 and 1525 seen) and are still one row; stacked menu buttons are 180 or more apart.
-        list.Sort((a, b) => Math.Abs(a.Y - b.Y) > 150 ? a.Y.CompareTo(b.Y) : a.X.CompareTo(b.X));
-        return list;
+        return ReadingOrder(list);
+    }
+
+    /// <summary>
+    /// Rows top to bottom, each left to right. Buttons under cards of different heights sit at
+    /// staggered heights (1381 and 1525 seen) and are still one row, so a row spans 150 px. A
+    /// button with another one stacked in its column closer than that (the language list: two
+    /// columns, rows 120 apart) only shares a row with buttons level with it. This used to be a
+    /// pairwise "150 apart: by y, else by x" sort, which is no order at all for such a list: the
+    /// languages were numbered 2, 4, 7, 9, 8, 12, 16, 15, 14 going down.
+    /// </summary>
+    internal static List<NavButton> ReadingOrder(List<NavButton> buttons)
+    {
+        bool Stacked(NavButton b) => buttons.Any(o => !ReferenceEquals(o, b) && Math.Abs(o.X - b.X) < 40 && Math.Abs(o.Y - b.Y) <= 150);
+        var ordered = new List<NavButton>();
+        var row = new List<NavButton>();
+        void EndRow() { ordered.AddRange(row.OrderBy(b => b.X)); row.Clear(); }
+        foreach (var b in buttons.OrderBy(b => b.Y).ThenBy(b => b.X))
+        {
+            if (row.Count > 0)
+            {
+                var span = Stacked(b) || Stacked(row[0]) ? 40 : 150;
+                if (b.Y - row[0].Y > span || row.Any(r => Math.Abs(r.X - b.X) < 40)) EndRow();
+            }
+            row.Add(b);
+        }
+        EndRow();
+        return ordered;
     }
 
     // ------------------------------------------------------------ on-demand reads (hotkeys)

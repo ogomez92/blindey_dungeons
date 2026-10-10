@@ -86,6 +86,19 @@ objects are 4-aligned, not 8 — they follow a 4-byte GC header). From it:
 is OpenFL's wrapper over `Type.resolveClass`. Static fields are then plain `val_field`
 reads on the Class object.
 
+**The bridge starts the companion (Windows).** Steam's Play button without launch options
+starts the game alone: nothing spoke, and a player pressed Tab on the first-run language
+chooser, which crashes the game (§5). So 3 s after `hx_set_loader`, if no pipe client has
+connected and no `DiceyA11y.exe` process exists, the bridge starts
+`<game>\DiceyA11y\DiceyA11y.exe --started-by-game` minimized and without activation
+(`SW_SHOWMINNOACTIVE`, new console), and it attaches to the running game. Started through
+the launcher or Steam's launch options the companion already exists and nothing happens.
+`--started-by-game` keeps an error from waiting on Enter in a console nobody sees.
+`DICEYA11Y_NO_AUTOSTART=1` turns it off for development. Verified 2026-10-09 through Steam:
+the game kept focus throughout, and Tab on the chooser was swallowed. It cannot help after a
+game update: Steam's own `lime.ndll` is back then, and only the launcher started first
+repairs it, so the launch options stay recommended.
+
 ### Facts about this hxcpp build that cost time
 
 - `val_type` reports **8 for an instance of a class**, and `4` for both anonymous objects
@@ -152,6 +165,18 @@ on-screen preview: every card was read in one go, and the release handler slept 
 key-action queue, so the next arrow waited behind it.)
 Left Control stops speech through `HotkeyHook.BindObserved`: the hook runs the action and
 passes the key on, so it is still the Control of Ctrl+D and Alt+Tab.
+**What the hook swallows.** It is a low-level (system-wide) hook because the game is a native
+SDL window the companion cannot reach into, but it only acts while the game window is in front
+(`ScopeHotkeysToGame`). Even there, a key held with Alt, the Windows key, or the screen
+reader's key (Insert or Caps Lock) is never taken: those count as Alt in the chord, which
+nothing binds (as Command does on the Mac). Players reported the mod "took the whole keyboard":
+Win+Tab, Win+arrows and NVDA+Up/Tab/F12 died in the game, and Win+E ended the turn. Insert and
+Caps Lock are tracked by the hook itself, because the screen reader swallows them in its own
+hook (after ours: the most recently installed low-level hook runs first), so Windows never
+records them as held and `GetAsyncKeyState` says up. Not tested with a real key press: the dev
+pipe bypasses the hook. A capture inside the game (the bridge subclassing the SDL window) would
+remove the system-wide hook altogether, but it means native code and protocol changes, and
+the Mac would still need its event tap. It was judged not worth the risk (2026-10-06).
 Ctrl+D / Ctrl+H / Ctrl+E read dice, health and enemy health. The title's own
 "(Esc) Options" hint is therefore wrong under the mod; `StageCleaner` rewrites it to F11.
 
@@ -227,6 +252,20 @@ screen today. Rules learned from the second play-test:
   Intro para coger"; short labels stay "Ok, press Enter".
 - Tutorial lines that point at the screen get the key appended (`TutorialHints`: R for the
   inventory, Tab for the enemy's moves), matched on the cleaned text in en and es.
+- **"N of M" is reading order** (`ScreenMonitor.ReadingOrder`): rows top to bottom, a row
+  spanning 150 px (staggered buttons under cards), but a button stacked in its own column
+  closer than that only shares a row with buttons level with it. The language chooser (two
+  columns, rows 120 apart) was numbered 2, 4, 7, 9, 8, 12... by the old pairwise sort (fixed
+  2026-10-09). There the game's Down from the left column goes to Play; Start Windowed /
+  Fullscreen are reached from the right column only (the game's navigation, not the mod's).
+  A first-run report of "a bug right after picking English" did not reproduce (fresh save,
+  installed v1.2.1, through the intro cutscene); `diceylanguage.json` in the save folder
+  holds the choice, delete it to get the chooser back (or set `languageselected` to
+  `"false"`). **Tab on that first-run chooser crashes the unmodded game** (verified
+  2026-10-09 with the original Lime and no mods folder): `Screen.startupdate` takes Tab as
+  a language change, `Title.reloadassets` asks `ProgressTracking.isunlocked`, and the save
+  is not loaded yet, so it hits a null reference. The companion's hook swallows Tab, so this
+  only bites when the companion is not running, which is why the bridge now starts it (§3).
 - The map's node prompts ("MEJORAR", "ABRIR", "A LUCHAR") are drawn text, not nav buttons:
   `activebutton` is null there, and they are read as paragraphs.
 
@@ -286,7 +325,22 @@ was played, while the used card slid away, and Combat Roll was dropped from the 
 the second play-test; `Combat.state` stays `playerturn:allocatedice` through that animation, so
 the state cannot be the guard), and only after a second miss does the card leave the list for
 the turn (`_refused`), the log says `Card list: the game kept the cursor on ... twice`, and the
-player hears where the cursor still is. Keys stay with the game in
+player hears where the cursor still is.
+**Fast arrows (fixed 2026-10-06, players reported skipped cards).** Keys are handled one at a
+time, but the move they start is finished by the poll, so a second arrow used to read the
+cursor where it had been: both pressed Right from the same card, the game moved twice, the
+retry pressed a third time and the card between was dropped as refused. Now each arrow first
+waits for the last move to land (`FinishListMove`: reads the cursor every frame, runs
+`AwaitingListMove`'s retry and vertical step itself, then `BridgeClient.RefreshReads` so the
+reads sent ahead are fresh again). It names a card that was passed but never spoken ("Spanner,
+2 of 4"). The poll may have had no time to speak it, or it saw the gadget's button still focused
+for one frame after the cursor left the panel. `Press` releases the previous press before the
+next one: a second Down while the button was still held moved nothing. `CardListActive` reads
+the focused button fresh: with the poll's copy, an arrow just after leaving the Inventor's gadget
+went to the game's own d-pad, which wraps, and repeats on its own after ~300 ms held (measured).
+`tools/rapidkeys.py` types arrows through the hook's own queue (dev command `press <Key> <ms>`)
+at chosen gaps and checks where the cursor ends. Old code: 3 wrong in 26 runs. New: 0 in 68,
+across Inventor, Robot, Thief and Jester. Keys stay with the game in
 dice mode, in `gamepad_buttonmode`, under prompts, with a textbox open, and when several
 buttons are up (jackpot prizes, the six request dice); a panel with ONE focused button (the
 Robot's Calculate focuses as soon as the cursor is on the panel) is just a list item, because
@@ -464,6 +518,8 @@ callable through reflection ("not a function") although their static *variables*
 - `DiceyA11y.exe --dev` + `tools/dev.py` — drives the companion's **real key path**
   (Windows drops synthetic keystrokes to an unfocused window, so a dev pipe feeds the
   same handlers) and prints what was spoken. `diceya11y.log` has every `Spoke:` line.
+  `key X` calls the handlers directly; `press Right 40` goes through `HotkeyHook.OnKey` and its
+  ordered queue, holding the key that long, as a real keyboard does (`tools/rapidkeys.py`).
 - `tools/autoplay.py` — walks and fights far enough to reach later screens.
 - Faster: `tools/setf.py "{Game}.monster" hp 1 "{Game}.monster" level 9` wins the fight on
   the next hit and forces a level-up (XP reward = enemy level); `"{Game}.player" gold 60`;

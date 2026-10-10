@@ -35,20 +35,21 @@ It has not yet been tested by a blind player — reports are very welcome.
    It finds the game through Steam (there is a Browse button if it cannot), downloads the
    mod and installs it. The installer works with a screen reader; `--cli` gives a terminal
    version.
-3. **Make Steam start the mod.** Out of the box, Steam's Play button starts the game
-   *without* the mod: nothing speaks. Fix that once: in your Steam library open the
-   **Properties** of Dicey Dungeons (Applications key or Shift+F10 on the game) and, on the
-   General tab, put this in the **Launch Options** box, quotes and `%command%` included:
+3. Press Play in Steam. The game starts, and a moment later the mod starts with it
+   (minimized; the game keeps the keyboard) and says "Dicey Dungeons accessibility
+   ready". It closes when the game does.
+4. **Recommended: Steam launch options.** After a game update Steam puts its own
+   `lime.ndll` back, and the mod can only repair that when it starts *before* the game.
+   To have Play always start the mod first, open the **Properties** of Dicey Dungeons in
+   your Steam library (Applications key or Shift+F10 on the game) and, on the General tab,
+   put this in the **Launch Options** box, quotes and `%command%` included:
 
    ```
    "C:\Program Files (x86)\Steam\steamapps\common\Dicey Dungeons\DiceyA11y\DiceyA11y.exe" %command%
    ```
 
    Change the first part if your game is installed somewhere else; the installer's last
-   message shows the line with your own path. Without `%command%` at the end Steam still
-   starts the game on its own, with no mod.
-4. Press Play. The launcher starts Dicey Dungeons for you, says "Dicey Dungeons
-   accessibility ready", and closes when the game does.
+   message shows the line with your own path.
 
 Without Steam's help you can also start **`DiceyA11y\DiceyA11y.exe` inside the game folder**
 yourself (a desktop shortcut to it helps). If the game is already running it attaches to it
@@ -72,7 +73,7 @@ deletes the `DiceyA11y` folder.
 Download `DiceyA11y-v….zip` from the release, extract it **into the game folder** (so that
 the `DiceyA11y` folder ends up next to `diceydungeons.exe`), and start
 `DiceyA11y\DiceyA11y.exe`: on its first start the launcher installs the bridge itself.
-Set the Steam launch options of step 3 above if you want to start it from Steam.
+After that, Steam's Play button starts the mod too (and see step 4 above).
 To remove it by hand, run `DiceyA11y\tools\install_bridge.ps1 -Uninstall` in PowerShell (or
 verify the game files in Steam) and delete the `DiceyA11y` folder.
 
@@ -263,9 +264,10 @@ Logs are written next to the exe and overwritten each launch:
 | `diceya11y-spoken.log` | Only what was said |
 | `<game folder>\diceya11y-bridge.log` | The in-game half: whether it loaded and hooked |
 
-- **Nothing is spoken at all** — most likely the game was started from Steam without the
-  launch options of Install step 3, so the launcher never ran (there is then no fresh
-  `diceya11y.log` either). Otherwise look for `Speech backend:` in `diceya11y.log`.
+- **Nothing is spoken at all** — if there is no fresh `diceya11y.log`, the mod never
+  started: most likely a game update put Steam's `lime.ndll` back. Start
+  `DiceyA11y\DiceyA11y.exe` once with the game closed (it repairs that), and set the launch
+  options of Install step 4. Otherwise look for `Speech backend:` in `diceya11y.log`.
 - **Only "ready" is spoken, then silence** — the bridge is not installed (Steam restored
   the file while the game was running, say). Close the game and start `DiceyA11y.exe`
   again, or run the installer again. The log says `Waiting for the bridge pipe`.

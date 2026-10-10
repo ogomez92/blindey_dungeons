@@ -21,6 +21,7 @@ if (-not $NoBuild) {
 }
 
 if (-not $NoLaunch) {
+  $env:DICEYA11Y_NO_AUTOSTART = '1'   # the game's bridge must not start a companion of its own
   if ($GameArgs) { Start-Process (Join-Path $GameDir "diceydungeons.exe") -WorkingDirectory $GameDir -ArgumentList $GameArgs }
   else           { Start-Process (Join-Path $GameDir "diceydungeons.exe") -WorkingDirectory $GameDir }
   Write-Host "Game launched."

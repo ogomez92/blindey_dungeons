@@ -208,7 +208,11 @@ public sealed partial class CombatHandler : ScreenHandler
         // sliding away, and each frame of that would otherwise count as a new focus.
         if (key is NavKey.Up or NavKey.Down or NavKey.Left or NavKey.Right or NavKey.Confirm or NavKey.Back) { _navKeyAt = DateTime.UtcNow; _navKey = key; }
         if (key == NavKey.X && ctx.State.Focus == null && !_limitPrompt && !_fleePrompt) _quietUntil = DateTime.UtcNow.AddSeconds(2.5);
-        if (key is NavKey.Left or NavKey.Right && MoveCardCursor(ctx, key == NavKey.Left ? -1 : 1)) return true;
+        if (key is NavKey.Left or NavKey.Right)
+        {
+            FinishListMove(ctx);
+            if (MoveCardCursor(ctx, key == NavKey.Left ? -1 : 1)) return true;
+        }
         // Up and Down used to be Left and Right's twins on the card list. Whenever the list has
         // the arrows they move within the Tab group instead (CombatGroups.cs); in dice mode, on
         // a panel's buttons and under prompts they still reach the game.
@@ -224,15 +228,19 @@ public sealed partial class CombatHandler : ScreenHandler
     private bool CardListActive(ScreenContext ctx)
     {
         if (_paused || _limitPrompt || _fleePrompt || _previewing || _spellSlot != -2 || _narrator.Ended) return false;
-        var v = ctx.Bridge.Batch(Combat + ".state", Combat + ".gamepad_dicemode", Combat + ".gamepad_buttonmode", Selected + ".skillcard");
+        var v = ctx.Bridge.Batch(Combat + ".state", Combat + ".gamepad_dicemode", Combat + ".gamepad_buttonmode", Selected + ".skillcard",
+                                 "{ButtonGamepadNavigation}.activebutton.label");
         if (!v[0].AsString().StartsWith("playerturn", StringComparison.Ordinal) || v[1].AsBool() || v[2].AsBool()) return false;
 
         // A panel card under the cursor focuses its button before A is pressed (seen: the Robot's
         // Calculate), and the game's own arrows then wrap from the panel to some other card. One
         // button is just the panel's face and the list goes on; several buttons (jackpot prizes,
         // the six request dice) are a choice, and the arrows belong to it.
-        if (ctx.State.Focus is { } focused
-            && (v[3].AsString().Length == 0 || focused.RawLabel == "dicebutton" || ctx.State.Buttons.Select(b => b.RawLabel).Distinct().Count() > 1)) return false;
+        // The focus is read now, not taken from the last poll: an arrow pressed just after the
+        // cursor left the Inventor's gadget saw the gadget's button still focused over a plain
+        // card, gave the key to the game's own d-pad, and the cursor wrapped or skipped a card.
+        if (v[4].Kind == GameValueKind.String
+            && (v[3].AsString().Length == 0 || v[4].AsString() == "dicebutton" || ctx.State.Buttons.Select(b => b.RawLabel).Distinct().Count() > 1)) return false;
         return !TextboxOpen(ctx);
     }
 
@@ -274,6 +282,7 @@ public sealed partial class CombatHandler : ScreenHandler
         var button = sameColumn ? (target.Y > from.Y ? PadButton.Down : PadButton.Up) : (target.X > from.X ? PadButton.Right : PadButton.Left);
         if (!ctx.State.GamepadMode) ctx.Bridge.Eval("{ControlMode}.notifyGamepadInput()");
         _wanted = new WantedCard(target.Index, target.Name, target.X, target.Y, DateTime.UtcNow, button, sameColumn ? -1 : target.Row);
+        _lastMove = _wanted;
         Press(ctx, _wanted);
         return true;   // the poll speaks the new card: its key changed and an arrow was just pressed
     }
@@ -281,10 +290,74 @@ public sealed partial class CombatHandler : ScreenHandler
     /// <summary>One press of the d-pad button that leads to the wanted card, with the row hint the game picks stacked cards by.</summary>
     private void Press(ScreenContext ctx, WantedCard want)
     {
+        // The last press is let go first: the game reads a press as the button going down, so a
+        // second Right while the first was still held moved nothing, and the first one's delayed
+        // release could land on the frame of the second and swallow it.
+        ReleasePress();
         if (want.PreferredRow >= 0) ctx.Bridge.SetField(Combat, "gamepad_preferredrow", want.PreferredRow.ToString());
         _pad.Down(want.Button);
-        _ = Task.Run(async () => { await Task.Delay(60); _pad.Up(want.Button); });
+        int press;
+        lock (_pressLock) { _held = want.Button; press = ++_presses; }
+        _ = Task.Run(async () => { await Task.Delay(60); ReleasePress(press); });
     }
+
+    private readonly object _pressLock = new();
+    private PadButton? _held;
+    private int _presses;
+
+    /// <summary>Lets go of the button the last press holds; with <paramref name="press"/>, only if no press came after it.</summary>
+    private void ReleasePress(int press = 0)
+    {
+        PadButton? button;
+        lock (_pressLock)
+        {
+            if (press != 0 && press != _presses) return;
+            button = _held;
+            _held = null;
+        }
+        if (button is { } b) _pad.Up(b);
+    }
+
+    /// <summary>
+    /// Before the next arrow: lets the last list move land (including its retry and its
+    /// vertical step, AwaitingListMove). Keys are handled one at a time, but the poll that
+    /// finishes a move is not, so two quick arrows read the cursor where it had been: both
+    /// pressed Right from the same card, the game moved twice, the retry pressed Right a third
+    /// time, and the card in between was dropped as refused. Players heard it as cards skipped.
+    /// </summary>
+    private void FinishListMove(ScreenContext ctx)
+    {
+        if (_lastMove is not { } last) return;
+        _lastMove = null;
+        GameValue[] v;
+        if (_wanted == null)
+            v = ctx.Bridge.Batch(Selected + ".name", Selected + ".tx", Selected + ".ty");   // landed already: sent ahead with this key
+        else
+        {
+            var until = DateTime.UtcNow.AddMilliseconds(1000);
+            do
+            {
+                ctx.Bridge.ForgetReads();   // the cursor is still moving: read it from the game every frame
+                v = ctx.Bridge.Batch(Selected + ".name", Selected + ".tx", Selected + ".ty");
+            } while (!v[0].IsError && AwaitingListMove(ctx, v[0], v[1], v[2]) && DateTime.UtcNow < until);
+            ctx.Bridge.RefreshReads();
+        }
+
+        // The poll speaks a card once the cursor rests on it, and it may not have had the chance
+        // (the next arrow was already waiting, or the gadget's button still looked focused for a
+        // frame after the cursor left it). Each card passed is still named, with its place, and
+        // the next one cuts it short, as a screen reader does in any list.
+        if (_wanted != null || v[0].AsString() != last.Name || Math.Abs(v[1].AsDouble() - last.X) >= 1 || Math.Abs(v[2].AsDouble() - last.Y) >= 1) return;
+        var key = $"card:{v[0].Raw}:{v[1].AsDouble():0},{v[2].AsDouble():0}";
+        if (key == _focusKey) return;
+        _focusKey = key;
+        var (cards, at) = ListCards(ctx);
+        var passed = TextCleanup.Join(CardText.Name(ctx, Selected), ListPosition(cards.Count, at));
+        if (passed.Length > 0) ctx.Say(passed, interrupt: true);
+    }
+
+    /// <summary>The card the last arrow went for, until the next arrow checks it was spoken.</summary>
+    private WantedCard? _lastMove;
 
     private sealed record ListCard(int Index, string Name, double X, double Y, int Row, string Skill);
 

@@ -25,6 +25,8 @@ public sealed class HotkeyHook : IDisposable
     private const int VK_SHIFT = 0x10;
     private const int VK_CONTROL = 0x11;
     private const int VK_MENU = 0x12;   // Alt
+    private const int VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+    private const int VK_INSERT = 0x2D, VK_CAPITAL = 0x14;   // the screen reader's modifier keys
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KBDLLHOOKSTRUCT
@@ -202,12 +204,24 @@ public sealed class HotkeyHook : IDisposable
             return CallNextHookEx(_hook, nCode, wParam, lParam);
 
         var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-        var swallow = OnKey((int)data.vkCode, down,
+        var vk = (int)data.vkCode;
+        if (vk is VK_INSERT or VK_CAPITAL) _readerKeyDown[vk == VK_INSERT ? 0 : 1] = down;
+        // Alt, the Windows key and the screen reader's own key (Insert or Caps Lock, in NVDA, JAWS
+        // and Narrator) count as Alt does: they make a chord nothing binds, so Win+Tab, Win+arrows,
+        // NVDA+Up, NVDA+Tab and Alt+F4 reach Windows and the screen reader. Players found the mod
+        // took the whole keyboard while the game had focus: Win+E even ended their turn.
+        // Insert and Caps Lock are tracked here, not asked of Windows: the screen reader swallows
+        // them in its own hook, after this one, so Windows never records them as held.
+        var swallow = OnKey(vk, down,
             () => ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0,
                    (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
-                   (GetAsyncKeyState(VK_MENU) & 0x8000) != 0));
+                   (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 || (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
+                   || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0 || _readerKeyDown[0] || _readerKeyDown[1]));
         return swallow ? 1 : CallNextHookEx(_hook, nCode, wParam, lParam);
     }
+
+    /// <summary>Insert, Caps Lock: held right now, as this hook saw them go down and up.</summary>
+    private readonly bool[] _readerKeyDown = new bool[2];
 
     /// <summary>
     /// One key event from either platform, as a Windows virtual-key code. True = swallow it.

@@ -4,6 +4,7 @@
 param([string]$GameArgs = "", [string]$GameDir = "S:\steam\steamapps\common\Dicey Dungeons")
 Get-Process DiceyA11y, diceydungeons -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep 2
+$env:DICEYA11Y_NO_AUTOSTART = '1'   # the game's bridge must not start a companion of its own
 if ($GameArgs) { Start-Process (Join-Path $GameDir "diceydungeons.exe") -WorkingDirectory $GameDir -ArgumentList $GameArgs }
 else { Start-Process (Join-Path $GameDir "diceydungeons.exe") -WorkingDirectory $GameDir }
 Start-Sleep 9
