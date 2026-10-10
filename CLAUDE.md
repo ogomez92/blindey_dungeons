@@ -592,6 +592,14 @@ hand builds the zip as an artifact without releasing.
   (version + SHA-256) at the top of the workflow.
 - **Zip layout**: everything under `DiceyA11y/`, extracted into the game folder. The bridge
   travels as `DiceyA11y/bridge/lime.ndll`; it is never extracted over the game's file.
+- **The launcher is self-contained and single-file** (since v1.2.4): `DiceyA11y.exe`
+  (~70 MB, zip ~33 MB) carries the .NET runtime. Up to v1.2.3 it was framework-dependent,
+  and a player without the .NET 9 runtime got a silent game; the only hint was a sentence
+  in the installer's final message box. The installer deletes the `DiceyA11y.dll`,
+  `.deps.json` and `.runtimeconfig.json` older releases left, and the workflow fails a zip
+  that has a runtimeconfig. `AppContext.BaseDirectory` is the exe's folder in single-file
+  too; never use `Assembly.Location` (empty there). The Mac app stays a plain self-contained
+  publish (`PublishSingleFile` off), as `package_mac.sh` expects.
 - **Three things can do the lime.ndll swap, with the same rules** (marker export, never
   save a bridge or anything under 3 MB as the original): `tools/install_bridge.ps1`, the
   installer (`mods\installer\src\core\proxy.rs`, refuses *before* extracting), and the

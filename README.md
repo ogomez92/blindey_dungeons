@@ -25,7 +25,9 @@ It has not yet been tested by a blind player — reports are very welcome.
 
 - Windows, 64-bit, and Dicey Dungeons (tested on Steam v2.1)
 - A screen reader (NVDA or JAWS) or any SAPI voice; [Prism](https://github.com/ethindp/prism) picks the best available
-- The [.NET 9 runtime](https://dotnet.microsoft.com/download/dotnet/9.0) (x64; ".NET Runtime" or ".NET Desktop Runtime", either works)
+
+Nothing else: since v1.2.4 the mod carries its own .NET runtime (earlier versions needed the
+.NET 9 runtime installed).
 
 ## Install
 

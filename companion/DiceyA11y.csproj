@@ -10,10 +10,15 @@
     <AssemblyName>DiceyA11y</AssemblyName>
     <RootNamespace>DiceyA11y</RootNamespace>
     <!-- The release workflow refuses a tag that does not match this. -->
-    <Version>1.2.0</Version>
+    <Version>1.2.4</Version>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>false</SelfContained>
+    <!--
+      Self-contained, so players need no .NET runtime installed (a missing runtime meant a
+      silent game). Single file keeps the folder down to DiceyA11y.exe and prism.dll.
+    -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
     <!-- The Mac key tap passes a function pointer to native code. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -26,6 +31,8 @@
   -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <!-- package_mac.sh lays the published files out inside an app bundle. -->
+    <PublishSingleFile>false</PublishSingleFile>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == 'win-x64' OR '$(RuntimeIdentifier)' == ''">osx-arm64</RuntimeIdentifier>
   </PropertyGroup>
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
