@@ -152,6 +152,12 @@ public sealed class HotkeyHook : IDisposable
 
     public IEnumerable<Chord> Bindings => _bindings.Keys;
 
+    /// <summary>Runs on the key action queue, in order with the keys: the controller's presses go through here.</summary>
+    public void RunOrdered(Action action) => _ordered.Enqueue(action, _log);
+
+    /// <summary>Runs (on the hook thread, so it must be instant) whenever the mod takes a key.</summary>
+    public Action KeyboardUsed { get; set; } = () => { };
+
     /// <summary>macOS: runs when the keyboard cannot be read until the player grants a permission.</summary>
     public Action NeedsPermission { get; set; } = () => { };
 
@@ -262,6 +268,7 @@ public sealed class HotkeyHook : IDisposable
                 && _shouldHandle())
             {
                 lock (_heldDown) { _heldDown[vk] = held.Up; }
+                KeyboardUsed();
                 _ordered.Enqueue(held.Down, _log);
                 return true;
             }
@@ -270,6 +277,7 @@ public sealed class HotkeyHook : IDisposable
                 && (!ScopeToGameWindow || GameWindowFocused())
                 && _shouldHandle())
             {
+                KeyboardUsed();
                 // Run off the hook thread: a slow handler here would stall all input
                 // system-wide, and the system would silently drop the hook.
                 ThreadPool.QueueUserWorkItem(_ =>

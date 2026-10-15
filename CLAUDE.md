@@ -180,6 +180,28 @@ the Mac would still need its event tap. It was judged not worth the risk (2026-1
 Ctrl+D / Ctrl+H / Ctrl+E read dice, health and enemy health. The title's own
 "(Esc) Options" hint is therefore wrong under the mod; `StageCleaner` rewrites it to F11.
 
+**The player's own controller (`Input/ControllerInput.cs`, 2026-10-15).** Left with the game, a
+real pad drove the game's navigation directly: none of the mod's helpers (card list, map cursor,
+Tab groups, review keys) existed on it, and speech never interrupted, because `NoteInput` only
+ran for keys (a player reported a long queue when moving fast). The mod now takes the pad: the
+real `GamepadState` (the one whose `gamepad` is not null) is parked in the virtual pad's
+`rumble.inputgamepad` (a typed `GamepadState` slot nothing else writes; handles cannot outlive a
+request) and spliced out of `GamepadManager.gamepads`. Lime's listeners still write into it,
+the game no longer folds it, and its `internal_justpressed` is no longer cleared at the end of
+the frame, so it latches until the mod clears it (`seti`): a tap shorter than a read is kept.
+A reader thread reads it every frame (one batch: pressed, justpressed, six axes,
+`gamepad.connected`) and turns it into `PadControl` downs and ups, which `Program.OnController`
+runs on the key action queue through `NavDown`/`NavUp`, so every press interrupts as a key does.
+Back is a shift key: tapped alone it is Back, held it turns the other buttons into the reading
+keys (layout in `Program.BindController` and the README). `Strings.PadMode` (on with any
+controller press, off with any key the hook takes) makes `Strings.T` prefer the `.pad` twin of a
+line (`Strings.Pad.cs`, `"<key>.pad"` in `Locale/*.json`), so prompts say "press A". On a clean
+exit the pad is pushed back into the game's list. All of this was verified with a pad faked
+through Lime itself: `tools/fakepad.py connect` (`Gamepad.__connect(99)`, the game's
+`onGamepadConnect` adds its state) and `press A Down RT` (`onButtonDown.dispatch(n)`,
+`onAxisMove.dispatch(axis, v)`), which is the path SDL's events take. **Not yet tried with a
+physical controller**, nor through Steam Input.
+
 **Both stick axes must be set in the same frame** (one `batch`). With x set a frame
 before y the game reads a horizontal push and walks to the wrong map node (seen).
 
@@ -251,7 +273,13 @@ screen today. Rules learned from the second play-test:
 - **A lone button is what Enter does**: `PressEnterTo` says "Press Enter to take" / "Pulsa
   Intro para coger"; short labels stay "Ok, press Enter".
 - Tutorial lines that point at the screen get the key appended (`TutorialHints`: R for the
-  inventory, Tab for the enemy's moves), matched on the cleaned text in en and es.
+  inventory, Tab for the enemy's moves), matched on the cleaned text (spaces ignored) in all
+  21 languages, the lines copied from each `cutscenes.csv`.
+- **The mod's own words** follow `MyLocale.currentlanguage`: English and Spanish in
+  `Core/Strings.cs`, the controller twins in `Strings.Pad.cs`, every other language in
+  `companion/Locale/<code>.json` (embedded; machine translated 2026-10-15, keys = the English
+  keys plus `<key>.pad`). Players heard English mixed into their language before. A missing line
+  falls back to English; `--selftest` checks every table's placeholders against English.
 - **"N of M" is reading order** (`ScreenMonitor.ReadingOrder`): rows top to bottom, a row
   spanning 150 px (staggered buttons under cards), but a button stacked in its own column
   closer than that only shares a row with buttons level with it. The language chooser (two

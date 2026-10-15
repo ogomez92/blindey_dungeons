@@ -31,6 +31,9 @@ public sealed class Config
     /// <summary>Hotkeys only act while Dicey Dungeons is the foreground window.</summary>
     public bool ScopeHotkeysToGame { get; set; } = true;
 
+    /// <summary>The mod takes the player's controller from the game and reads it like the keyboard.</summary>
+    public bool ControllerSupport { get; set; } = true;
+
     public static string DefaultPath =>
         Path.Combine(DataDirectory, "DiceyA11y.cfg");
 
@@ -147,6 +150,7 @@ public sealed class Config
             case "announcestatuschanges": c.AnnounceStatusChanges = Bool(value, c.AnnounceStatusChanges); break;
             case "maxeventbuffer": c.MaxEventBuffer = Int(value, c.MaxEventBuffer); break;
             case "scopehotkeystogame": c.ScopeHotkeysToGame = Bool(value, c.ScopeHotkeysToGame); break;
+            case "controllersupport": c.ControllerSupport = Bool(value, c.ControllerSupport); break;
         }
     }
 
@@ -197,6 +201,9 @@ public sealed class Config
 
             # Only let the review hotkeys fire while Dicey Dungeons is focused.
             ScopeHotkeysToGame={c.ScopeHotkeysToGame}
+
+            # The mod reads your controller (its buttons work like the mod's keys). False leaves it to the game alone.
+            ControllerSupport={c.ControllerSupport}
             """;
         File.WriteAllText(path, text);
     }

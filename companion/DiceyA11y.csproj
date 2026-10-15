@@ -42,6 +42,11 @@
     </None>
   </ItemGroup>
 
+  <!-- The mod's own words in every language but English and Spanish (Core/Strings.cs loads them). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Locale\*.json" LogicalName="Locale.%(Filename).json" />
+  </ItemGroup>
+
   <!--
     prism.dll is a NATIVE library. It is copied next to the built exe and loaded
     explicitly by full path (see Speech/PrismNative.Load) because the exe's own

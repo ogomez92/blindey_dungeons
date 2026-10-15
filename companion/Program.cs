@@ -153,6 +153,7 @@ public static class Program
         BindHotkeys();
         BindRateKeys(config, configPath);
         BindGamepadKeys();
+        BindController(config);
         _hotkeys.Start();
 
         var exitCode = 0;
@@ -169,7 +170,7 @@ public static class Program
             if (!launcher.AttachIfRunning()) launcher.Start(Path.Combine(dataDir, "diceya11y-game.log"));
             _hotkeys.GameProcessId = launcher.ProcessId;
             _speech.Say(Strings.T("mod.ready"));
-            if (BridgeInstalled(config)) _screens.Start();
+            if (BridgeInstalled(config)) { _screens.Start(); _controller.Start(); }
             else
             {
                 _log.Write("Bridge not installed: lime.ndll in the game folder is not the mod's. Run the installer again (or tools/install_bridge.ps1).");
@@ -194,6 +195,7 @@ public static class Program
         }
 
         _hotkeys.Dispose();
+        _controller.Dispose();   // gives the controller back to the game while the bridge is still up
         _screens.Dispose();
         _bridge.Dispose();
         launcher.Dispose();
@@ -262,32 +264,57 @@ public static class Program
             }
         }
 
+        foreach (var problem in Strings.CheckTables())
+        {
+            // An untranslated line falls back to English and is reported, not failed.
+            if (!problem.EndsWith("not translated", StringComparison.Ordinal)) failures++;
+            Console.WriteLine((problem.EndsWith("not translated", StringComparison.Ordinal) ? "note  " : "FAIL  ") + problem);
+        }
+        Console.WriteLine($"ok    language tables: {string.Join(" ", Strings.EmbeddedLanguages().OrderBy(x => x))}");
+
         Console.WriteLine(failures == 0 ? "All text pipeline cases passed." : $"{failures} case(s) failed.");
         return failures == 0 ? 0 : 1;
     }
 
     // ------------------------------------------------------------- hotkeys
 
+    // What the mod's own keys do; the keyboard and the controller (BindController) share them.
+    private static void Speak(string text) => _speech.Say(text, interrupt: true);
+
+    // Help becomes the current list, so the review keys walk it one line at a time instead of
+    // forcing the player to sit through the whole thing.
+    private static void SayHelp() => Speak(_buffers.ShowHelp(HelpEntries()) + ". " + _buffers.Current.Current());
+    private static void SayLast() => Speak(string.IsNullOrEmpty(_lastAnnouncement) ? Strings.T("nothing.announced") : _lastAnnouncement);
+    private static void SayFocus() => Speak(_screens.DescribeFocus());
+    private static void SayScreen() => Speak(_screens.DescribeScreen());
+    private static void SayContext() => Speak(!_screens.Connected && _narrator.InCombat
+        ? TextCleanup.Join(_narrator.DescribePlayer(), _narrator.DescribeEnemy(), _narrator.DescribeDice())
+        : _screens.DescribeContext());
+    private static void SayStatus(StatusKind kind) => Speak(_screens.DescribeStatus(kind));
+    private static void ReviewDeeper() => Speak(_buffers.Current.MoveDeeper());
+    private static void ReviewTowardTop() => Speak(_buffers.Current.MoveTowardTop());
+    private static void ReviewNextList() => Speak(_buffers.NextBuffer());
+    private static void ReviewPreviousList() => Speak(_buffers.PreviousBuffer());
+    private static void ScreenCursor(int direction) => Speak(_screens.MoveScreenCursor(direction));
+    private static void ScreenCursorClick() => Speak(_screens.ClickScreenCursor());
+
+    /// <summary>Make that list current, then read where its cursor is.</summary>
+    private static void JumpToBuffer(string bufferName)
+    {
+        var header = _buffers.Select(bufferName);
+        var buffer = _buffers.Current;
+        // An empty buffer already says so in its header; do not say it twice.
+        Speak(buffer.IsEmpty ? header : header + ". " + buffer.Current());
+    }
+
     private static void BindHotkeys()
     {
-        // F1 makes help the current list, so Ctrl+Up walks it one key at a time
-        // instead of forcing the player to sit through the whole thing.
-        _hotkeys.Bind(Keys.F1, () =>
-        {
-            var header = _buffers.ShowHelp(HelpEntries());
-            _speech.Say(header + ". " + _buffers.Current.Current(), interrupt: true);
-        });
-
-        _hotkeys.Bind(Keys.F1, () => _speech.Say(string.Join(". ", HelpEntries()), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.F2, () => _speech.Say(string.IsNullOrEmpty(_lastAnnouncement)
-            ? "Nothing announced yet"
-            : _lastAnnouncement, interrupt: true));
-
-        _hotkeys.Bind(Keys.F3, () => _speech.Say(_screens.DescribeFocus(), interrupt: true));
-        _hotkeys.Bind(Keys.F4, () => _speech.Say(_screens.DescribeScreen(), interrupt: true));
-        _hotkeys.Bind(Keys.F5, () => _speech.Say(!_screens.Connected && _narrator.InCombat
-            ? TextCleanup.Join(_narrator.DescribePlayer(), _narrator.DescribeEnemy(), _narrator.DescribeDice())
-            : _screens.DescribeContext(), interrupt: true));
+        _hotkeys.Bind(Keys.F1, SayHelp);
+        _hotkeys.Bind(Keys.F1, () => Speak(string.Join(". ", HelpEntries())), control: true);
+        _hotkeys.Bind(Keys.F2, SayLast);
+        _hotkeys.Bind(Keys.F3, SayFocus);
+        _hotkeys.Bind(Keys.F4, SayScreen);
+        _hotkeys.Bind(Keys.F5, SayContext);
 
         // Direct jumps: make that buffer current, then read where the cursor is.
         BindBuffer(Keys.F6, BufferManager.YourCards);
@@ -297,36 +324,36 @@ public static class Program
 
         // Ctrl + arrows drive the review model: up/down within a buffer, left/right
         // between buffers. The game itself uses bare arrows, never Ctrl+arrows.
-        _hotkeys.Bind(Keys.Up, () => _speech.Say(_buffers.Current.MoveDeeper(), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.Down, () => _speech.Say(_buffers.Current.MoveTowardTop(), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.Right, () => _speech.Say(_buffers.NextBuffer(), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.Left, () => _speech.Say(_buffers.PreviousBuffer(), interrupt: true), control: true);
+        _hotkeys.Bind(Keys.Up, ReviewDeeper, control: true);
+        _hotkeys.Bind(Keys.Down, ReviewTowardTop, control: true);
+        _hotkeys.Bind(Keys.Right, ReviewNextList, control: true);
+        _hotkeys.Bind(Keys.Left, ReviewPreviousList, control: true);
 
         // The screen cursor: a keyboard stand-in for the mouse, for the few things the game
         // gives neither the gamepad nor the mod's own lists.
-        _hotkeys.Bind(Keys.PageDown, () => _speech.Say(_screens.MoveScreenCursor(+1), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.PageUp, () => _speech.Say(_screens.MoveScreenCursor(-1), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.Enter, () => _speech.Say(_screens.ClickScreenCursor(), interrupt: true), control: true);
+        _hotkeys.Bind(Keys.PageDown, () => ScreenCursor(+1), control: true);
+        _hotkeys.Bind(Keys.PageUp, () => ScreenCursor(-1), control: true);
+        _hotkeys.Bind(Keys.Enter, ScreenCursorClick, control: true);
 
         // At-a-glance status, from anywhere in a battle (health also on the map).
-        _hotkeys.Bind(Keys.Letter('D'), () => _speech.Say(_screens.DescribeStatus(StatusKind.Dice), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.Letter('H'), () => _speech.Say(_screens.DescribeStatus(StatusKind.Health), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.Letter('E'), () => _speech.Say(_screens.DescribeStatus(StatusKind.Enemies), interrupt: true), control: true);
-        _hotkeys.Bind(Keys.F12, () => _speech.Say(WhereAmI(), interrupt: true));
+        _hotkeys.Bind(Keys.Letter('D'), () => SayStatus(StatusKind.Dice), control: true);
+        _hotkeys.Bind(Keys.Letter('H'), () => SayStatus(StatusKind.Health), control: true);
+        _hotkeys.Bind(Keys.Letter('E'), () => SayStatus(StatusKind.Enemies), control: true);
+        _hotkeys.Bind(Keys.F12, () => Speak(WhereAmI()));
     }
 
     /// <summary>
     /// Speech rate, where the mod owns it (AVSpeech on macOS; a screen reader has its own).
     /// Saved to the config, so the next start keeps it.
     /// </summary>
-    private static Func<int, string> _changeRate = _ => "rate not adjustable";
+    private static Func<int, string> _changeRate = _ => Strings.T("rate.fixed");
 
     private static void BindRateKeys(Config config, string configPath)
     {
         if (!_speech.OwnsRate) return;
         _changeRate = delta =>
         {
-            if (_speech.ChangeRate(delta) is not { } rate) return "rate not adjustable";
+            if (_speech.ChangeRate(delta) is not { } rate) return Strings.T("rate.fixed");
             config.SpeechRate = rate;
             try { Config.Save(config, configPath); } catch (Exception ex) { _log.Write("Could not save the rate: " + ex.Message); }
             var said = Strings.T("speech.rate", rate);
@@ -375,6 +402,122 @@ public static class Program
         // Left Control silences speech, as it does in the screen reader itself; the key still
         // reaches the game and still works as the Control of the review shortcuts.
         _hotkeys.BindObserved(Keys.LeftControl, () => _speech.StopSpeech());
+    }
+
+    /// <summary>
+    /// The player's own controller (Input/ControllerInput takes it from the game). Its buttons go
+    /// through NavDown / NavUp exactly as the keys standing in for them do, so the mod's card
+    /// list, map cursor and battle groups work on it, and every press interrupts speech the way a
+    /// key does. What the keyboard has on keys of its own:
+    ///   d-pad or left stick = arrows; A B X Y LB RB Start as in the game; Back tapped = Back.
+    ///   Triggers: battle groups (Tab, Shift+Tab); on the map the points of interest (period, comma).
+    ///   Left stick click: map walk (P). Right stick click: map recentre (Space), elsewhere stop speech.
+    ///   Right stick: review lists (Control + arrows).
+    ///   Back held + A focus (F3), B last announcement (F2), X screen (F4), Y at a glance (F5),
+    ///   Start help (F1), up health, down dice, right enemy health, left where am I (F12),
+    ///   LB your cards (F6), RB enemy cards (F7), left trigger statuses (F8), right trigger
+    ///   events (F9), right stick left/right/click the screen cursor (Control+Page Up/Down/Enter).
+    /// The help lines that name these are the ".pad" twins in Strings.Pad.cs.
+    /// </summary>
+    private static void BindController(Config config)
+    {
+        _controller = new ControllerInput(_bridge, _pad, _log.Write) { Enabled = config.ControllerSupport };
+        _controller.Changed += (control, down) => _hotkeys.RunOrdered(() => OnController(control, down));
+        _controller.Connection += connected =>
+        {
+            if (!connected) { Strings.PadMode = false; return; }
+            Strings.PadMode = true;
+            _speech.Say(Strings.T("pad.connected"), interrupt: true);
+        };
+        _hotkeys.KeyboardUsed = () => Strings.PadMode = false;
+    }
+
+    private static ControllerInput _controller = null!;
+    private static readonly Dictionary<PadControl, NavKey> PadNavHeld = new();
+    private static bool _backHeld, _backChord;
+
+    private static bool OnMap => _screens.Scene == "states.Dungeon";
+
+    private static void OnController(PadControl control, bool down)
+    {
+        if (down) Strings.PadMode = true;
+
+        // A press that went to the game is released there, whatever Back did meanwhile.
+        if (!down && PadNavHeld.Remove(control, out var held)) { NavUp(held); return; }
+
+        if (control == PadControl.Back)
+        {
+            // Back is a button of the game (flee, close) and the mod's shift key: tapped alone it
+            // is Back, held with another control it reads.
+            if (down) { _backHeld = true; _backChord = false; return; }
+            _backHeld = false;
+            if (!_backChord) { NavDown(NavKey.Select); Thread.Sleep(60); NavUp(NavKey.Select); }
+            return;
+        }
+        if (!down) return;
+
+        if (_backHeld)
+        {
+            _backChord = true;
+            Action? read = control switch
+            {
+                PadControl.A => SayFocus,
+                PadControl.B => SayLast,
+                PadControl.X => SayScreen,
+                PadControl.Y => SayContext,
+                PadControl.Start => SayHelp,
+                PadControl.DpadUp or PadControl.LeftStickUp => () => SayStatus(StatusKind.Health),
+                PadControl.DpadDown or PadControl.LeftStickDown => () => SayStatus(StatusKind.Dice),
+                PadControl.DpadRight or PadControl.LeftStickRight => () => SayStatus(StatusKind.Enemies),
+                PadControl.DpadLeft or PadControl.LeftStickLeft => () => Speak(WhereAmI()),
+                PadControl.LeftShoulder => () => JumpToBuffer(BufferManager.YourCards),
+                PadControl.RightShoulder => () => JumpToBuffer(BufferManager.EnemyCards),
+                PadControl.LeftTrigger => () => JumpToBuffer(BufferManager.Statuses),
+                PadControl.RightTrigger => () => JumpToBuffer(BufferManager.Events),
+                PadControl.RightStickLeft => () => ScreenCursor(-1),
+                PadControl.RightStickRight => () => ScreenCursor(+1),
+                PadControl.RightStickClick => ScreenCursorClick,
+                PadControl.RightStickUp => ReviewDeeper,
+                PadControl.RightStickDown => ReviewTowardTop,
+                _ => null,
+            };
+            read?.Invoke();
+            return;
+        }
+
+        NavKey? nav = control switch
+        {
+            PadControl.DpadUp or PadControl.LeftStickUp => NavKey.Up,
+            PadControl.DpadDown or PadControl.LeftStickDown => NavKey.Down,
+            PadControl.DpadLeft or PadControl.LeftStickLeft => NavKey.Left,
+            PadControl.DpadRight or PadControl.LeftStickRight => NavKey.Right,
+            PadControl.A => NavKey.Confirm,
+            PadControl.B => NavKey.Back,
+            PadControl.X => NavKey.X,
+            PadControl.Y => NavKey.Y,
+            PadControl.LeftShoulder => NavKey.LeftShoulder,
+            PadControl.RightShoulder => NavKey.RightShoulder,
+            PadControl.Start => NavKey.Start,
+            PadControl.LeftTrigger => OnMap ? NavKey.PreviousItem : NavKey.GroupPrevious,
+            PadControl.RightTrigger => OnMap ? NavKey.NextItem : NavKey.GroupNext,
+            PadControl.LeftStickClick when OnMap => NavKey.Path,
+            PadControl.RightStickClick when OnMap => NavKey.Snap,
+            _ => null,
+        };
+        if (nav is { } key)
+        {
+            PadNavHeld[control] = key;
+            NavDown(key);
+            return;
+        }
+        switch (control)
+        {
+            case PadControl.RightStickUp: ReviewDeeper(); break;
+            case PadControl.RightStickDown: ReviewTowardTop(); break;
+            case PadControl.RightStickLeft: ReviewPreviousList(); break;
+            case PadControl.RightStickRight: ReviewNextList(); break;
+            case PadControl.RightStickClick: _speech.StopSpeech(); break;
+        }
     }
 
     private static readonly Dictionary<NavKey, PadButton> PadFor = new()
@@ -479,26 +622,20 @@ public static class Program
 
     private static void BindBuffer(int key, string bufferName)
     {
-        _hotkeys.Bind(key, () =>
-        {
-            var header = _buffers.Select(bufferName);
-            var buffer = _buffers.Current;
-            // An empty buffer already says so in its header; do not say it twice.
-            _speech.Say(buffer.IsEmpty ? header : header + ". " + buffer.Current(), interrupt: true);
-        });
-        _hotkeys.Bind(key, () => _speech.Say(_buffers.Get(bufferName).ReadAll(), interrupt: true), control: true);
+        _hotkeys.Bind(key, () => JumpToBuffer(bufferName));
+        _hotkeys.Bind(key, () => Speak(_buffers.Get(bufferName).ReadAll()), control: true);
     }
 
     private static string WhereAmI()
     {
         var parts = new List<string>();
         parts.Add(_screens.ScreenName());
-        if (!string.IsNullOrEmpty(_runCharacter)) parts.Add("Playing as " + _runCharacter);
-        if (_floor >= 0) parts.Add("floor " + _floor);
-        if (_turn >= 0 && _narrator.InCombat) parts.Add("turn " + _turn);
-        parts.Add(_narrator.InCombat ? "in battle" : "not in battle");
+        if (!string.IsNullOrEmpty(_runCharacter)) parts.Add(Strings.T("where.playing_as", _runCharacter));
+        if (_floor >= 0) parts.Add(Strings.T("where.floor", _floor));
+        if (_turn >= 0 && _narrator.InCombat) parts.Add(Strings.T("where.turn", _turn));
+        parts.Add(Strings.T(_narrator.InCombat ? "where.in_battle" : "where.not_in_battle"));
         if (_narrator.InCombat) parts.Add(_narrator.DescribeEnemy());
-        parts.Add("speech backend " + _speech.BackendName);
+        parts.Add(Strings.T("where.speech", _speech.BackendName));
         return string.Join(". ", parts);
     }
 

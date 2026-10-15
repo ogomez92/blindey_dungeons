@@ -87,14 +87,24 @@ public static partial class StageCleaner
         ["left_stick"] = "key.arrows", ["dpad"] = "key.arrows",
     };
 
-    /// <summary>Per-language rewording of instructions that name gamepad hardware.</summary>
+    /// <summary>
+    /// Per-language rewording of instructions that name gamepad hardware, for keyboard players
+    /// (on a controller the game's own words are right). Besides en and es, the phrase is the
+    /// one the game's tutorial wraps in [yellow] in data/text/locale/*/cutscenes.csv ("Use the
+    /// [yellow]Left Stick[] to walk to the chest!"), where the article is outside the tag.
+    /// </summary>
     private static readonly (string Language, Regex Pattern, string KeyString)[] HardwareWording =
-    {
-        ("es", new Regex(@"\bla\s+palanca\s+izquierda\b", RegexOptions.IgnoreCase), "key.arrows"),
-        ("es", new Regex(@"\bel\s+stick\s+izquierdo\b", RegexOptions.IgnoreCase), "key.arrows"),
-        ("en", new Regex(@"\bthe\s+left\s+stick\b", RegexOptions.IgnoreCase), "key.arrows"),
-        ("en", new Regex(@"\bleft\s+stick\b", RegexOptions.IgnoreCase), "key.arrows"),
-    };
+        new (string, string)[]
+        {
+            ("es", @"\bla\s+palanca\s+izquierda\b"), ("es", @"\bel\s+stick\s+izquierdo\b"),
+            ("en", @"\bthe\s+left\s+stick\b"), ("en", @"\bleft\s+stick\b"),
+            ("ar", "العصا اليسرى"), ("br", @"\bcontrole\s+esquerdo\b"), ("ca", @"\bpalanca\s+esquerra\b"),
+            ("cy", @"\bFfon\s+Chwith\b"), ("de", @"\blinke[nrm]?\s+Stick\b"), ("fr", @"\bstick\s+gauche\b"),
+            ("ie", @"\bMaide\s+Clé\b"), ("it", @"\bstick\s+sinistro\b"), ("ja", "Lスティック"), ("ko", "L 스틱"),
+            ("nl", @"\blinkerstick\b"), ("pl", @"\blew(?:ego|y|ym)\s+drążk(?:a|iem|u)?\b"), ("sz", @"\blew(?:ego|y|ym)\s+drążk(?:a|iem|u)?\b"),
+            ("pt", @"\bmanípulo\s+esquerdo\b"), ("ru", @"Левы[йм][\s_]+мини-джойстик(?:ом)?"),
+            ("sc", "L摇杆"), ("tc", "L操控搖桿"), ("tr", @"\bSol\s+Çubuğu?\b"),
+        }.Select(w => (w.Item1, new Regex(w.Item2, RegexOptions.IgnoreCase), "key.arrows")).ToArray();
 
     public static string Language { get; set; } = "en";
 
@@ -135,9 +145,10 @@ public static partial class StageCleaner
             return OtherGlyphs.TryGetValue(key, out var k) ? " " + Strings.T(k) + " " : " ";
         });
 
-        foreach (var (language, pattern, keyString) in HardwareWording)
-            if (Language.StartsWith(language, StringComparison.OrdinalIgnoreCase))
-                s = pattern.Replace(s, Strings.T(keyString));
+        if (!Strings.PadMode)
+            foreach (var (language, pattern, keyString) in HardwareWording)
+                if (Language.StartsWith(language, StringComparison.OrdinalIgnoreCase))
+                    s = pattern.Replace(s, Strings.T(keyString));
 
         // The language list writes "(Chino_simplificado)": underscores are layout glue.
         s = s.Replace('_', ' ');

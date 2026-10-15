@@ -1,15 +1,16 @@
 # Dicey Dungeons Accessibility (DiceyA11y)
 
 Makes Dicey Dungeons playable with a screen reader: menus, the dungeon map and battles
-are spoken, and the whole game is driven from the keyboard.
+are spoken, and the whole game is driven from the keyboard or a controller.
 
 Dicey Dungeons has no keyboard controls of its own — it is played with a mouse or a
 gamepad. This mod plugs a virtual gamepad into the game and connects your keyboard to it,
 so every key press goes through the game's own navigation. What you hear focused is what
 Enter will act on.
 
-The mod speaks in the game's language where it has a translation (English and Spanish so
-far). Game text is always in whatever language the game is set to.
+The mod speaks in the game's language: all 21 languages the game ships have a translation
+of the mod's own words (English and Spanish by hand, the others machine translated -
+corrections welcome). Game text is always in whatever language the game is set to.
 
 **Status.** All six contestants, the Bear, every kind of map stop (shop, upgrade, copy
 shop, trade, chest, apple), the inventory, level-ups, bosses, the finale against Lady Luck,
@@ -239,6 +240,43 @@ blocks the way past it until you fight it, and the mod tells you so.
 Announcements are queued, never cut off. Your own key presses do interrupt: moving focus
 cuts off the previous focus reading, as any screen reader does.
 
+## Controller
+
+Plug in any controller the game itself accepts and the
+mod takes it over: it says "Controller ready", and from then on every button goes through the
+mod exactly as the keys do, so your presses cut off the speech before them and the mod's own
+helpers (the card list, the map cursor, the battle groups, the review lists) work on the pad.
+Prompts and help name buttons while you play on the controller and keys once you touch the
+keyboard again.
+
+| Control | Does |
+|---|---|
+| **D-pad** or **left stick** | Move (the arrow keys) |
+| **A**, **B**, **X**, **Y**, **LB**, **RB**, **Start** | As in the game (Enter, Escape, E, R, Q, W, F11) |
+| **Back** (View, Select, Share) tapped | The game's Back button (Backspace): flee in battle |
+| **Right trigger / left trigger** | In battle: next / previous group (Tab / Shift+Tab). On the map: next / previous point of interest (period / comma) |
+| **Left stick click** | On the map: walk to the cursor (P) |
+| **Right stick click** | On the map: cursor back to your space (Space). Elsewhere: stop speech |
+| **Right stick** | Review lists: up / down step through the current list, left / right change list (Ctrl + arrows) |
+
+Hold **Back** for the reading buttons (Back is only sent to the game when tapped alone):
+
+| Back + | Does |
+|---|---|
+| **Start** | Help (F1) |
+| **B** | Repeat the last announcement (F2) |
+| **A** | Read the focused item again (F3) |
+| **X** | Read everything on screen (F4) |
+| **Y** | Overview (F5) |
+| **D-pad up / down / right / left** | Your health / your dice / the enemy's health / where am I |
+| **LB / RB** | Your cards / the enemy's cards (F6 / F7) |
+| **Left / right trigger** | Status effects / events (F8 / F9) |
+| **Right stick left / right, click** | Screen cursor (Ctrl+Page Up / Page Down, Ctrl+Enter) |
+
+`ControllerSupport=False` in the settings leaves the controller to the game alone (the mod then
+neither reads it nor interrupts speech for it). When the mod closes it gives the controller
+back to the game.
+
 ## Settings
 
 `DiceyA11y.cfg` next to `DiceyA11y.exe`, plain `key=value`. The game folder is found
@@ -251,6 +289,7 @@ AnnounceEnemyEquipment=True   # list the enemy's cards when a battle starts
 AnnounceStatusChanges=True
 MaxEventBuffer=200
 ScopeHotkeysToGame=True       # False makes the keys global (not recommended)
+ControllerSupport=True        # the mod reads your controller; False leaves it to the game
 ModIds=                       # other Polymod mods to load, comma separated
 SpeechRate=50                 # macOS only: 0-100, 50 is normal (Control Plus / Minus)
 MacVoice=                     # macOS only: a voice name (Samantha) or language (es-ES)

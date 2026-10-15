@@ -6,7 +6,7 @@ namespace DiceyA11y.Core;
 /// language when a table for it exists, and fall back to English otherwise - a screen
 /// reader voice switching language mid-sentence is hard to follow.
 /// </summary>
-public static class Strings
+public static partial class Strings
 {
     private static readonly Dictionary<string, string> English = new()
     {
@@ -335,6 +335,9 @@ public static class Strings
         ["battle.groups_hint"] = "Tab goes through the enemy's cards, the status effects and your actions; Up and Down move within each group.",
         ["smith.upgraded"] = "Upgraded: {0}",
         ["shop.browse"] = "Left and right go through them.",
+        ["where.playing_as"] = "Playing as {0}", ["where.floor"] = "floor {0}", ["where.turn"] = "turn {0}",
+        ["where.in_battle"] = "in battle", ["where.not_in_battle"] = "not in battle", ["where.speech"] = "speech backend {0}",
+        ["rate.fixed"] = "The screen reader sets the speech rate.",
     };
 
     private static readonly Dictionary<string, string> Spanish = new()
@@ -663,21 +666,106 @@ public static class Strings
         ["battle.groups_hint"] = "Tabulador recorre las cartas del enemigo, los estados y tus acciones; arriba y abajo se mueven dentro de cada grupo.",
         ["smith.upgraded"] = "Mejorada: {0}",
         ["shop.browse"] = "Izquierda y derecha los recorren.",
+        ["where.playing_as"] = "Juegas con {0}", ["where.floor"] = "planta {0}", ["where.turn"] = "turno {0}",
+        ["where.in_battle"] = "en combate", ["where.not_in_battle"] = "fuera de combate", ["where.speech"] = "voz: {0}",
+        ["rate.fixed"] = "La velocidad de la voz la pone el lector de pantalla.",
     };
 
     private static Dictionary<string, string> _current = English;
+    private static Dictionary<string, string> _currentPad = PadEnglish;
+    private static readonly Dictionary<string, (Dictionary<string, string> Plain, Dictionary<string, string> Pad)> Loaded = new();
 
-    /// <summary>Two-letter game language code, e.g. "es". Unknown codes fall back to English.</summary>
+    /// <summary>
+    /// True while the player is on a controller: a line that names a key names the button
+    /// instead, when it has a controller twin (Strings.Pad.cs, "key.pad" in a language table).
+    /// </summary>
+    public static bool PadMode { get; set; }
+
+    /// <summary>The game's language code as last set ("en", "es", "br", "sc"...).</summary>
+    public static string Language { get; private set; } = "en";
+
+    /// <summary>
+    /// The game's language code (data/text/locale/*: en, es, fr, de, br, sc...). English and
+    /// Spanish live in this file; every other language is Locale/&lt;code&gt;.json, embedded in
+    /// the exe. A key a table lacks falls back to English.
+    /// </summary>
     public static void SetLanguage(string code)
     {
-        _current = code.StartsWith("es", StringComparison.OrdinalIgnoreCase) ? Spanish : English;
+        code = code.Trim().ToLowerInvariant();
+        Language = code;
+        if (code.StartsWith("es", StringComparison.Ordinal)) { _current = Spanish; _currentPad = PadSpanish; return; }
+        if (code.Length == 0 || code.StartsWith("en", StringComparison.Ordinal)) { _current = English; _currentPad = PadEnglish; return; }
+        (_current, _currentPad) = Load(code);
+    }
+
+    /// <summary>The languages with a table of their own, for the self test.</summary>
+    public static IEnumerable<string> EmbeddedLanguages()
+        => typeof(Strings).Assembly.GetManifestResourceNames()
+            .Where(n => n.StartsWith("Locale.", StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal))
+            .Select(n => n["Locale.".Length..^".json".Length]);
+
+    // One flat JSON object per language, key -> text; "<key>.pad" is the controller wording of <key>.
+    private static (Dictionary<string, string> Plain, Dictionary<string, string> Pad) Load(string code)
+    {
+        lock (Loaded)
+        {
+            if (Loaded.TryGetValue(code, out var known)) return known;
+            var plain = new Dictionary<string, string>();
+            var pad = new Dictionary<string, string>();
+            try
+            {
+                using var stream = typeof(Strings).Assembly.GetManifestResourceStream("Locale." + code + ".json");
+                if (stream != null)
+                {
+                    var table = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(stream) ?? new();
+                    foreach (var (k, v) in table)
+                    {
+                        if (string.IsNullOrWhiteSpace(v)) continue;
+                        // "help.pad" is a line of its own (the keyboard's pad keys); "help.pad.pad" its twin.
+                        if (k.EndsWith(".pad", StringComparison.Ordinal) && PadEnglish.ContainsKey(k[..^4])) pad[k[..^4]] = v; else plain[k] = v;
+                    }
+                }
+            }
+            catch { /* a damaged table must never silence the mod: English is used instead */ }
+            return Loaded[code] = (plain, pad);
+        }
     }
 
     public static bool Has(string key) => _current.ContainsKey(key) || English.ContainsKey(key);
 
     public static string T(string key, params object[] args)
     {
-        if (!_current.TryGetValue(key, out var s) && !English.TryGetValue(key, out s)) return key;
-        return args.Length == 0 ? s : string.Format(s, args);
+        // On a controller: this language's button wording, else its key wording (one language
+        // throughout beats the right button names in English), else English.
+        string? s = null;
+        if (PadMode) _currentPad.TryGetValue(key, out s);
+        if (s == null) _current.TryGetValue(key, out s);
+        if (s == null && PadMode) PadEnglish.TryGetValue(key, out s);
+        if (s == null && !English.TryGetValue(key, out s)) return key;
+        if (args.Length == 0) return s;
+        try { return string.Format(s, args); }
+        catch (FormatException)
+        {
+            // A translation with a broken placeholder: say the English line rather than nothing.
+            return English.TryGetValue(key, out var en) ? string.Format(en, args) : s;
+        }
+    }
+
+    /// <summary>The placeholders a line uses, {0} {1}...: a translation must use the same ones.</summary>
+    public static IEnumerable<string> CheckTables()
+    {
+        static string Holes(string s) => string.Join(",", System.Text.RegularExpressions.Regex.Matches(s, @"\{\d+\}").Select(m => m.Value).Distinct().OrderBy(x => x));
+        foreach (var code in EmbeddedLanguages().Append("es"))
+        {
+            var (plain, pad) = code == "es" ? (Spanish, PadSpanish) : Load(code);
+            foreach (var (table, english, suffix) in new[] { (plain, English, ""), (pad, PadEnglish, ".pad") })
+                foreach (var (k, v) in table)
+                {
+                    if (!english.TryGetValue(k, out var en)) { yield return $"{code}: unknown key {k}{suffix}"; continue; }
+                    if (Holes(en) != Holes(v)) yield return $"{code}: {k}{suffix} uses {Holes(v)}, English uses {Holes(en)}";
+                }
+            var missing = English.Keys.Count(k => !plain.ContainsKey(k)) + PadEnglish.Keys.Count(k => !pad.ContainsKey(k));
+            if (missing > 0) yield return $"{code}: {missing} lines not translated";
+        }
     }
 }

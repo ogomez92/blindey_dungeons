@@ -51,6 +51,12 @@ public sealed class VirtualPad
     /// </summary>
     public void Ensure() { lock (_lock) { if (_index < 0) Locate(); } }
 
+    /// <summary>The pad's place in the game's list as an expression, or null while it cannot be made.</summary>
+    public string? Slot
+    {
+        get { lock (_lock) return _index >= 0 || Locate() ? $"{Pads}[{_index}]" : null; }
+    }
+
     public void Down(PadButton button) => Send($"onButtonDown({(int)button})");
     public void Up(PadButton button) => Send($"onButtonUp({(int)button})");
 
