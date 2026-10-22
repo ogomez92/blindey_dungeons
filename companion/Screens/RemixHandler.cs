@@ -8,6 +8,12 @@ namespace DiceyA11y.Screens;
 /// when lastoneisrandom the last is "a different rule chosen at random"), the cursor is
 /// highlightedremix (up / down), A takes it. The rules already in force are remixes.
 /// The options are panels, not buttons, so they are read from state. Observed live.
+///
+/// Challenge mode (the Halloween Special: Remix.mode = "challenge", one rule offered per floor)
+/// uses the same scene with state "challenge_N": nothing to choose, highlightedremix -1, the
+/// floor's rule and the floors still hidden drawn as text, and a Continue button. Read as a
+/// choice it said "2 options" and "Nothing is focused here" (play-test, 2026-10-22); there the
+/// screen's own text and its button are read as on any other screen.
 /// </summary>
 public sealed class RemixHandler : ScreenHandler
 {
@@ -23,10 +29,13 @@ public sealed class RemixHandler : ScreenHandler
         base.OnEnter(ctx);
     }
 
-    protected override bool ShouldSpeak(ScreenContext ctx, Paragraph p) => false;
+    protected override bool ShouldSpeak(ScreenContext ctx, Paragraph p) => Challenge(ctx);
+
+    private static bool Challenge(ScreenContext ctx) => ctx.Bridge.Eval(Scene + ".state").AsString().StartsWith("challenge", StringComparison.Ordinal);
 
     protected override void OnEntryRead(ScreenContext ctx)
     {
+        if (Challenge(ctx)) return;
         var current = Current(ctx);
         if (Reviewing(ctx)) { ctx.SayEvent(Strings.T("remix.review", current.Length > 0 ? current : Strings.T("pack.none"))); return; }
         ctx.SayEvent(Strings.T("remix.intro", Count(ctx)) + (current.Length > 0 ? " " + Strings.T("remix.current", current) : ""));
@@ -64,6 +73,7 @@ public sealed class RemixHandler : ScreenHandler
 
     public override string DescribeFocus(ScreenContext ctx)
     {
+        if (Challenge(ctx)) return base.DescribeFocus(ctx);
         if (Reviewing(ctx)) return Strings.T("remix.review", Current(ctx));
         var index = ctx.Bridge.Eval(Scene + ".highlightedremix").AsInt();
         var count = Count(ctx);
@@ -74,6 +84,7 @@ public sealed class RemixHandler : ScreenHandler
 
     public override string DescribeContext(ScreenContext ctx)
     {
+        if (Challenge(ctx)) return base.DescribeContext(ctx);
         if (Reviewing(ctx)) return Strings.T("remix.review", Current(ctx));
         var options = Enumerable.Range(0, Count(ctx)).Select(i => Describe(ctx, $"{Scene}.remixoptions[{i}]"));
         var current = Current(ctx);

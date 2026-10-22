@@ -433,7 +433,9 @@ the only place an upgrade's "+ 1" exists) and falls back to
 `Gamedata.getequipmenttemplate(name).fulldescription`. `CardScreenHandler` mutes card
 faces on the stage, reads cards whole, and ties the focused button to the card whose
 x-span contains it (the game's own rule in `Equipment.showgamepadhighlight`). Built on it:
-`PickupHandler`, `ShopHandler` (prices exist only as drawn text under each card),
+`PickupHandler`, `ShopHandler` (prices exist only as drawn text under each card; wares that
+are not cards, an apple or an upgrade coupon, have no `equipment`: their caption is the ware's
+`textfield[0].textfield._text`, centred at `textfield[0]._x` over its Buy button),
 `LevelUpHandler`, `BarterHandler`.
 
 **Grids without buttons** — `BackpackHandler` (`states.Backpack.gamepad_column/row/
@@ -503,7 +505,9 @@ What is drawn and now read (audit of the published source, 2026-09-29, each veri
   counted when `requirementsmatched_usedblinddice`), `Spellbook.spells_availablethisturn`
   ("Unavailable", dice refused), `Spellbook.upgradedslots`.
 
-Other screens added late: `RemixHandler` (`Remixstate.remixoptions`, `highlightedremix`,
+Other screens added late: `RemixHandler` (in challenge mode, the Halloween Special's fixed rules,
+`state` is `challenge_N` and there is nothing to choose: read as an ordinary screen;
+`Remixstate.remixoptions`, `highlightedremix`,
 `previewmode` when opened from the map with X), `FinaleSelectHandler` (`charlist`,
 `characterselection`), `InventoryFullHandler`, and a generic rule in `ScreenHandler`:
 several buttons with the same caption in a row each read the text in their column first.
