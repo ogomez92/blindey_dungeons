@@ -635,15 +635,15 @@ Intel Macs.
 
 ## 10. Releases and the installer
 
-**Distribution since v1.5.0 (2026-10-16): offline installers on Patreon.** The repo is
-private, so the online installer's release check gets a 404 and offers only Uninstall. Build
+**Distribution: GitHub releases again since v1.6.0 (2026-10-22, repo made public), plus
+offline installers on Patreon.** From v1.5.0 (2026-10-16) the repo was private and the online
+installer's release check got a 404 and offered only Uninstall. Offline installer: build
 the zip locally (`tools/package_release.ps1 -GameDir <game> -PrismDir <prism folder>`), then
 `build_offline_dicey.bat <zip> v<version>` in the shared installer folder: the zip is built into
 `DiceyDungeonsAccessibilityInstaller-v<version>-offline.exe`, which installs or updates to
-exactly that version. The README (shipped as readme.html) points players to Patreon, never to
-GitHub releases.
+exactly that version. The README (shipped as readme.html) names both installers.
 
-Repository: `gomods1/dicey` (private). Its root is the folder *above* this one: it holds
+Repository: `gomods1/dicey` (public since 2026-10-22). Its root is the folder *above* this one: it holds
 `DiceyA11y/` and the ignored `game_src/`; `.gitignore` sits there too, and its rules are
 written `DiceyA11y/...`. (Until 2026-09-29 this folder was its own repo,
 `ogomez92/blindey_dungeons`, and then a submodule; installers built before 2026-09-29 still

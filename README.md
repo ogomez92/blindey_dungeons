@@ -33,10 +33,15 @@ Nothing else: since v1.2.4 the mod carries its own .NET runtime (earlier version
 ## Install
 
 1. Close Dicey Dungeons.
-2. Run the installer you downloaded from Patreon
-   (**DiceyDungeonsAccessibilityInstaller-v….-offline.exe**). The mod is inside it, so it
-   needs no internet connection. It finds the game through Steam (there is a Browse button
-   if it cannot) and installs the mod. The installer works with a screen reader; `--cli`
+2. Run the installer. There are two, and either will do:
+   - **DiceyDungeonsAccessibilityInstaller-v….-offline.exe**, from Patreon. The mod is inside
+     it, so it needs no internet connection.
+   - **DiceyDungeonsAccessibilityInstaller.exe**, from the
+     [releases page](https://github.com/gomods1/dicey/releases/latest). It downloads the latest
+     version of the mod from there.
+
+   It finds the game through Steam (there is a Browse button if it cannot) and installs the
+   mod. The installer works with a screen reader; `--cli`
    gives a terminal version.
 3. Press Play in Steam. The game starts, and a moment later the mod starts with it
    (minimized; the game keeps the keyboard) and says "Dicey Dungeons accessibility
@@ -62,9 +67,9 @@ What gets installed: one folder, `DiceyA11y`, inside the game folder, and the ga
 `lime.ndll` is replaced by the mod's bridge, with the original kept next to it as
 `lime_orig.dll`. Nothing else in the game is touched.
 
-**Updating:** each installer carries one version of the mod. To update, download the new
-installer from Patreon and run it; it shows the version you have and the version it
-contains, and installs over the old one.
+**Updating:** run the installer from the releases page again (it fetches the newest version),
+or download the new offline installer from Patreon. Either shows the version you have and
+the version it would install, and installs over the old one.
 
 **After a game update, or Steam's "verify integrity of game files"**, Steam puts its own
 `lime.ndll` back. The launcher notices and repairs that by itself the next time you start
