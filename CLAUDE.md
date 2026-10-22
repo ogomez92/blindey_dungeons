@@ -647,6 +647,16 @@ the zip locally (`tools/package_release.ps1 -GameDir <game> -PrismDir <prism fol
 `DiceyDungeonsAccessibilityInstaller-v<version>-offline.exe`, which installs or updates to
 exactly that version. The README (shipped as readme.html) names both installers.
 
+**Mirror: `ogomez92/blindey_dungeons`** (public again since 2026-10-22). The mod's first home;
+installers built before 2026-09-29 fetch releases from it, so every release is cut there too.
+Its root is this folder, its history continues the old one (the commits since were replayed onto
+it, no force push), and it has its own `.gitignore` and a copy of the release workflow without
+the `DiceyA11y/` prefixes. To sync, from the repo root: `git fetch blindey`,
+`git subtree split --prefix=DiceyA11y -b blindey-sync` (deterministic: the same commits get the
+same ids), then on a worktree of `blindey/main` cherry-pick `<last synced split commit>..blindey-sync`
+(the commit messages match those in `gomods1/dicey`), push to `main`, and push the same `vX.Y.Z`
+tag there. The installer conflicts on replay (both sides add it): take the incoming version.
+
 Repository: `gomods1/dicey` (public since 2026-10-22). Its root is the folder *above* this one: it holds
 `DiceyA11y/` and the ignored `game_src/`; `.gitignore` sits there too, and its rules are
 written `DiceyA11y/...`. (Until 2026-09-29 this folder was its own repo,
