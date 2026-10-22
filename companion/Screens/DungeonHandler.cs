@@ -19,8 +19,9 @@ namespace DiceyA11y.Screens;
 ///
 /// So on this screen the mod owns movement, through a cursor of its own that explores the
 /// map without moving the player: the arrows move it from space to space, comma and period
-/// jump it between the points of interest, Space brings it back to the player, P says how to
-/// walk to it. Enter walks to the space under the cursor when it is one step away (by
+/// jump it between the points of interest, Space brings it back to the player and says what is
+/// around them, P walks to it, M marks a space and G brings the cursor back to the mark.
+/// Enter walks to the space under the cursor when it is one step away (by
 /// pushing the virtual stick at exactly that neighbour), and on the player's own space it is
 /// the game's A: open the chest, start the fight.
 /// </summary>
@@ -39,6 +40,9 @@ public sealed class DungeonHandler : ScreenHandler
     private string _cursorId = "";
     private DateTime _stepAt = DateTime.MinValue;   // when the last step was asked for
     private string _stepFrom = "";
+    private int _floor = -1;          // Game.currentfloor at the last read
+    private string _mark = "";        // "floor|node" marked with M; another floor ignores it
+    private static bool _hintGiven;   // once per session: the keys a new player does not know yet
 
     public DungeonHandler(VirtualPad pad) => _pad = pad;
 
@@ -114,6 +118,8 @@ public sealed class DungeonHandler : ScreenHandler
                 _cursorId = here.Id;   // the cursor travels with the player
                 var text = DescribeHere(ctx, here) + " " + DescribeExits(ctx, map, here);
                 if (first) ctx.SayEvent(text); else ctx.Say(text, interrupt: RecentInput(ctx));
+                // Players walked every floor by the arrows alone, not knowing comma and period.
+                if (first && !_hintGiven) { _hintGiven = true; ctx.SayEvent(Strings.T("map.hint")); }
                 if (ctx.State.Focus == null) ctx.FocusItem(CursorLines(ctx, map, here, here));
             }
         }
@@ -178,6 +184,8 @@ public sealed class DungeonHandler : ScreenHandler
             case NavKey.NextItem: Cycle(ctx, +1); return true;
             case NavKey.Snap: Snap(ctx); return true;
             case NavKey.Path: StartWalk(ctx); return true;
+            case NavKey.Mark: ToggleMark(ctx); return true;
+            case NavKey.GoToMark: GoToMark(ctx); return true;
             case NavKey.Confirm: return Walk(ctx);
             default: return false;
         }
@@ -261,6 +269,10 @@ public sealed class DungeonHandler : ScreenHandler
         if (here == null) return;
         // Points of interest only: an empty space next door is an exit, not a point of interest.
         var targets = Targets(map, here).Where(t => t.Node.Type != "EMPTY").ToList();
+        // The player's own space stays in the list while something is on it (the exit they just
+        // walked to, a chest not opened yet). Left out, a player who arrived at the exit and
+        // looked around had to walk back out to find it again (play-test, 2026-10-22).
+        if (here.Type != "EMPTY") targets.Insert(0, new Target(here, new List<MapNode>()));
         if (targets.Count == 0) { ctx.Say(Strings.T("map.no_exits"), interrupt: true); return; }
 
         var index = targets.FindIndex(t => t.Node.Id == _cursorId);
@@ -268,10 +280,37 @@ public sealed class DungeonHandler : ScreenHandler
         SetCursor(ctx, map, here, targets[index].Node, Strings.T("of", index + 1, targets.Count));
     }
 
+    /// <summary>Space: the cursor back on the player, and what lies around them (players got lost and wanted exactly this).</summary>
     private void Snap(ScreenContext ctx)
     {
         var map = ReadFloor(ctx, out var here);
-        if (here != null) SetCursor(ctx, map, here, here);
+        if (here == null) return;
+        _cursorId = here.Id;
+        ctx.Say(DescribeCursor(ctx, map, here, here) + ". " + DescribeExits(ctx, map, here), interrupt: true);
+        ctx.FocusItem(CursorLines(ctx, map, here, here));
+    }
+
+    private bool IsMarked(MapNode node) => _mark == $"{_floor}|{node.Id}";
+
+    /// <summary>M: mark the space under the cursor (an exit, an apple, a shop left for later), or unmark it.</summary>
+    private void ToggleMark(ScreenContext ctx)
+    {
+        var map = ReadFloor(ctx, out var here);
+        if (here == null) return;
+        var node = CursorNode(map, here);
+        if (IsMarked(node)) { _mark = ""; ctx.Say(Strings.T("map.unmarked"), interrupt: true); return; }
+        ctx.Say(Strings.T("map.mark_set", DescribeNode(ctx, node, false)), interrupt: true);
+        _mark = $"{_floor}|{node.Id}";
+    }
+
+    /// <summary>G: the cursor jumps to the marked space; P then walks there.</summary>
+    private void GoToMark(ScreenContext ctx)
+    {
+        var map = ReadFloor(ctx, out var here);
+        if (here == null) return;
+        var node = map.Values.FirstOrDefault(IsMarked);
+        if (node == null) { ctx.Say(Strings.T("map.no_mark"), interrupt: true); return; }
+        SetCursor(ctx, map, here, node);
     }
 
     /// <summary>P: walk to the space under the cursor. The route (fights avoided where possible) is said first.</summary>
@@ -310,7 +349,7 @@ public sealed class DungeonHandler : ScreenHandler
 
     // ------------------------------------------------------------------ reading the floor
 
-    private static Dictionary<string, MapNode> ReadFloor(ScreenContext ctx, out MapNode? here)
+    private Dictionary<string, MapNode> ReadFloor(ScreenContext ctx, out MapNode? here)
     {
         here = null;
         var paths = new List<string> { "x", "y", "type", "enemytemplate.name", "visited", "connections.length" };
@@ -318,8 +357,9 @@ public sealed class DungeonHandler : ScreenHandler
 
         var map = new Dictionary<string, MapNode>();
         var rows = ctx.Bridge.Pluck(Nodes, paths.ToArray());
-        var at = ctx.Bridge.Batch(Position + ".x", Position + ".y");
+        var at = ctx.Bridge.Batch(Position + ".x", Position + ".y", "{Game}.currentfloor");
         if (rows == null || !at[0].Exists) return map;
+        _floor = at[2].AsInt();
 
         foreach (var r in rows)
         {
@@ -404,7 +444,7 @@ public sealed class DungeonHandler : ScreenHandler
     }
 
     /// <summary>The space under the cursor and how it relates to the player: theirs, one step away, or how far.</summary>
-    private static string DescribeCursor(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here, MapNode node)
+    private string DescribeCursor(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here, MapNode node)
     {
         var what = DescribeNode(ctx, node, true);
         if (node.Id == here.Id) return Strings.T("map.cursor_here", what);
@@ -414,7 +454,7 @@ public sealed class DungeonHandler : ScreenHandler
     }
 
     /// <summary>The item list for the space under the cursor: what it is, what it joins, how to get there.</summary>
-    private static List<string> CursorLines(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here, MapNode node)
+    private List<string> CursorLines(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here, MapNode node)
     {
         var lines = new List<string> { DescribeCursor(ctx, map, here, node) };
         var joined = node.Links.Where(map.ContainsKey).Select(id => map[id]).OrderBy(n => Sector(n.X - node.X, n.Y - node.Y))
@@ -425,7 +465,7 @@ public sealed class DungeonHandler : ScreenHandler
     }
 
     /// <summary>P: the walk from the player to the cursor, step by step, with runs of one direction folded.</summary>
-    private static string DescribePath(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here, MapNode node)
+    private string DescribePath(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here, MapNode node)
     {
         if (node.Id == here.Id) return Strings.T("map.path_here");
         var route = Routes(map, here).GetValueOrDefault(node.Id);
@@ -463,15 +503,15 @@ public sealed class DungeonHandler : ScreenHandler
         return lines;
     }
 
-    private static string DescribeHere(ScreenContext ctx, MapNode node) => Strings.T("map.here", DescribeNode(ctx, node, false));
+    private string DescribeHere(ScreenContext ctx, MapNode node) => Strings.T("map.here", DescribeNode(ctx, node, false));
 
-    private static string DescribeExits(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here)
+    private string DescribeExits(ScreenContext ctx, Dictionary<string, MapNode> map, MapNode here)
     {
         var exits = Targets(map, here).Where(t => t.Route.Count == 1).Select(t => DescribeTarget(ctx, here, t)).ToList();
         return exits.Count == 0 ? Strings.T("map.no_exits") : Strings.T("map.exits", string.Join("; ", exits));
     }
 
-    private static string DescribeTarget(ScreenContext ctx, MapNode here, Target t)
+    private string DescribeTarget(ScreenContext ctx, MapNode here, Target t)
     {
         var first = t.Route[0];
         var direction = Strings.T("dir." + Sector(first.X - here.X, first.Y - here.Y));
@@ -496,11 +536,12 @@ public sealed class DungeonHandler : ScreenHandler
         };
     }
 
-    private static string DescribeNode(ScreenContext ctx, MapNode node, bool withVisited)
+    private string DescribeNode(ScreenContext ctx, MapNode node, bool withVisited)
     {
         // The finale: a contestant under Lady Luck's spell. Stepping on the space is a fight; winning frees them.
         if (node.Type == "TEAMMATE" && node.Enemy.Length > 0)
-            return Strings.T("map.teammate", ctx.Translate(node.Enemy)) + (withVisited && node.Visited ? ", " + Strings.T("map.visited") : "");
+            return Strings.T("map.teammate", ctx.Translate(node.Enemy)) + (withVisited && node.Visited ? ", " + Strings.T("map.visited") : "")
+                   + (withVisited && IsMarked(node) ? ", " + Strings.T("map.marked") : "");
 
         var key = "map.node." + node.Type;
         var what = Strings.Has(key) ? Strings.T(key) : node.Type.ToLowerInvariant();
@@ -509,8 +550,9 @@ public sealed class DungeonHandler : ScreenHandler
         // shown until it is opened, so GraphNode.item is deliberately never read.
         if (node.Type == "ENEMY" && node.Enemy.Length > 0) what += " " + ctx.Translate(node.Enemy);
         if (withVisited && node.Visited && node.Type == "EMPTY") what += ", " + Strings.T("map.visited");
+        if (withVisited && IsMarked(node)) what += ", " + Strings.T("map.marked");
         return what;
     }
 
-    public override IEnumerable<string> Help => new[] { Strings.T("help.map"), Strings.T("help.map.pack"), Strings.T("help.map.rules"), Strings.T("help.map.training") }.Concat(base.Help);
+    public override IEnumerable<string> Help => new[] { Strings.T("help.map"), Strings.T("help.map.more"), Strings.T("help.map.pack"), Strings.T("help.map.rules"), Strings.T("help.map.training") }.Concat(base.Help);
 }

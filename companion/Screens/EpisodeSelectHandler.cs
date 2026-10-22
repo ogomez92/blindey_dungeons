@@ -56,12 +56,39 @@ public sealed class EpisodeSelectHandler : ScreenHandler
         if (v[0].AsInt() != _page)
         {
             _page = v[0].AsInt();
-            ctx.Say(TextCleanup.Join(Strings.T("episode.page", _page + 1, v[1].AsInt()), Position(ctx)), interrupt: RecentInput(ctx));
+            ctx.Say(TextCleanup.Join(Strings.T("episode.page", _page + 1, v[1].AsInt()), DescribeFocus(ctx)), interrupt: RecentInput(ctx));
             var locked = LockedOnPage(ctx);
             if (locked.Length > 0) ctx.SayEvent(locked);
             return;
         }
-        ctx.Say(Position(ctx), interrupt: RecentInput(ctx));
+        ctx.Say(DescribeFocus(ctx), interrupt: RecentInput(ctx));
+    }
+
+    /// <summary>
+    /// The selected episode's description and rules, as the panel under the doors shows them.
+    /// Left to the generic path they were only heard on entry: the stage only reports text it
+    /// had not shown at its last settle, so coming back to an episode said its name alone, and
+    /// an arrow that moved nothing (the next door locked) said only the name (play-test, 2026-10-22).
+    /// </summary>
+    private string Rules(ScreenContext ctx)
+    {
+        var description = ctx.Bridge.Eval(Scene + ".activeepisode.description");
+        if (!description.Exists) return "";
+        var lines = new List<string> { ctx.Translate(description.AsString()) };
+        lines.AddRange(ctx.Bridge.Dump(Scene + ".activeepisode.rulesdescription").Select(e => ctx.Translate(e.Value.AsString())));
+        return TextCleanup.JoinSentences(lines.ToArray());
+    }
+
+    /// <summary>The letters of the episode last described: the panel's own text is not read a second time.</summary>
+    private string _spokenLetters = "";
+
+    private static string Letters(string text) => new string(text.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+
+    protected override bool ShouldSpeak(ScreenContext ctx, Paragraph p)
+    {
+        if (!EntryRead || _spokenLetters.Length == 0) return true;
+        var letters = Letters(p.Text);
+        return letters.Length == 0 || !_spokenLetters.Contains(letters, StringComparison.Ordinal);
     }
 
     /// <summary>"episode 4 of 6": where the door stands in the contestant's whole row.</summary>
@@ -133,13 +160,15 @@ public sealed class EpisodeSelectHandler : ScreenHandler
         return text + " " + Strings.T("episode.won", won, who);
     }
 
-    /// <summary>F3 and dead keys: the selected episode and where it is.</summary>
+    /// <summary>Each move, F3 and dead keys: the selected episode, where it is, and its rules.</summary>
     public override string DescribeFocus(ScreenContext ctx)
     {
         var name = ctx.Bridge.Eval(Scene + ".activeepisode.episodename");
         var position = Position(ctx);
         if (!name.Exists) return position.Length > 0 ? position : base.DescribeFocus(ctx);
-        return TextCleanup.Join(ctx.Translate(name.AsString()), position);
+        var text = TextCleanup.JoinSentences(TextCleanup.Join(ctx.Translate(name.AsString()), position), Rules(ctx));
+        _spokenLetters = Letters(text);
+        return text;
     }
 
     public override string DescribeScreen(ScreenContext ctx)

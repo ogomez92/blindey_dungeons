@@ -33,11 +33,11 @@ Nothing else: since v1.2.4 the mod carries its own .NET runtime (earlier version
 ## Install
 
 1. Close Dicey Dungeons.
-2. Download **DiceyDungeonsAccessibilityInstaller.exe** from the
-   [latest release](https://github.com/gomods1/dicey/releases/latest) and run it.
-   It finds the game through Steam (there is a Browse button if it cannot), downloads the
-   mod and installs it. The installer works with a screen reader; `--cli` gives a terminal
-   version.
+2. Run the installer you downloaded from Patreon
+   (**DiceyDungeonsAccessibilityInstaller-v….-offline.exe**). The mod is inside it, so it
+   needs no internet connection. It finds the game through Steam (there is a Browse button
+   if it cannot) and installs the mod. The installer works with a screen reader; `--cli`
+   gives a terminal version.
 3. Press Play in Steam. The game starts, and a moment later the mod starts with it
    (minimized; the game keeps the keyboard) and says "Dicey Dungeons accessibility
    ready". It closes when the game does.
@@ -62,7 +62,9 @@ What gets installed: one folder, `DiceyA11y`, inside the game folder, and the ga
 `lime.ndll` is replaced by the mod's bridge, with the original kept next to it as
 `lime_orig.dll`. Nothing else in the game is touched.
 
-**Updating:** run the installer again; it shows the installed and the latest version.
+**Updating:** each installer carries one version of the mod. To update, download the new
+installer from Patreon and run it; it shows the version you have and the version it
+contains, and installs over the old one.
 
 **After a game update, or Steam's "verify integrity of game files"**, Steam puts its own
 `lime.ndll` back. The launcher notices and repairs that by itself the next time you start
@@ -73,7 +75,7 @@ deletes the `DiceyA11y` folder.
 
 ### Without the installer
 
-Download `DiceyA11y-v….zip` from the release, extract it **into the game folder** (so that
+If you have the mod as a zip (`DiceyA11y-v….zip`), extract it **into the game folder** (so that
 the `DiceyA11y` folder ends up next to `diceydungeons.exe`), and start
 `DiceyA11y\DiceyA11y.exe`: on its first start the launcher installs the bridge itself.
 After that, Steam's Play button starts the mod too (and see step 4 above).
@@ -110,7 +112,9 @@ executable inside `diceydungeons.app`. Tested with the GOG Mac version 1.12 on A
 
 ## Keys
 
-Active only while the Dicey Dungeons window has focus.
+Active only while the Dicey Dungeons window has focus. **F1** on any screen lists the keys
+for that screen (Ctrl+Up / Ctrl+Down step through them), so you never need this page open
+while playing.
 
 ### Playing
 
@@ -159,7 +163,10 @@ move over them.
   card to destroy; each choice says which gadget it becomes and what that gadget does.
 - **Witch**: play a dice on the spellbook panel to summon the spell on the page with that
   number (each dice tells you what it would summon), then choose a spell slot with the
-  arrows and Enter. **R** on the map opens the spellbook to prepare spells.
+  arrows and Enter. **R** on the map opens the spellbook to prepare spells. When you find a
+  new spell, up and down go through the six pages of your book ("Page 5 of 6, empty"),
+  Enter writes the spell on that page (replacing what is there), Escape leaves it, and Q
+  shows the upgraded spell.
 - **Jester**: you hold a hand of cards. **R** discards matching cards and draws new ones;
   F5 tells you what is next in the deck. **R** on the map shows the deck.
 
@@ -168,9 +175,12 @@ mod did not get the key.
 
 ### Inventory, shops and other stops
 
-- **R** on the map opens the inventory: two grids, equipped cards and backpack. Arrows move
-  between cells (left from the equipped cards enters the backpack), Enter picks a card up,
-  Enter again puts it down; putting it on another card swaps them.
+- **R** on the map opens the inventory: two grids, equipped cards and backpack. Equipped has
+  3 columns of 2 cells and the backpack 4 columns of 5 (the mod says so when it opens). A
+  small card takes one cell; a large card takes two, one above the other, and is read as
+  "column 1, rows 1 and 2" from either cell. Arrows move between cells (left from the
+  equipped cards enters the backpack), Enter picks a card up, Enter again puts it down;
+  putting it on another card swaps them.
 - **Shop**: you hear your gold and what is for sale; left and right read each item in full
   with its price, Enter buys. Buying leaves the shop; you can walk in again.
 - **Upgrade**: arrows read each of your cards with what it becomes, Enter upgrades, **R**
@@ -205,13 +215,16 @@ work differently:
 | Key | Does |
 |---|---|
 | **Arrow keys** | Move a cursor along the paths, from space to space, to explore the map. This never moves you. Paths run up right, down right, down left, up left and sometimes straight up or down. An arrow follows the path on that side; when two paths lead that way both are named and one of the other arrows picks, so "up right" is Up and Right in either order. Each space says what it is and how far from you it is |
-| **Comma / Period** | Jump the cursor to the previous / next point of interest: the exits from your space first, then enemies, chests, shops, the way down |
-| **Space** | Bring the cursor back to the space you are on |
+| **Comma / Period** | Jump the cursor to the previous / next point of interest: the exits from your space first, then enemies, chests, shops, the way down. A chest you opened or an enemy you beat becomes an empty space and leaves the list, so the list is what is left to do on the floor |
+| **Space** | Bring the cursor back to the space you are on, and say what is around it |
+| **M** | Mark the space under the cursor (an exit, an apple or a shop you leave for later); M again on it removes the mark. One mark per floor |
+| **G** | Jump the cursor to the marked space; then P walks you there |
 | **P** | Walk to the space under the cursor. The way is said first; any key stops the walk, and so does an enemy standing in the way |
 | **Enter** | On a space one step away: walk there. On your own space: use it (open the chest, start the fight, enter the shop, go down). Further away nothing happens, and you are told how far it is |
 
 Your health, gold, level, dice and cards are in the **Player** list (Ctrl+Left / Right), and
-**Ctrl+H** reads your health from anywhere.
+**Ctrl+H** reads your health from anywhere. **F5** describes the whole floor: where you are,
+your exits and everything further away.
 
 Walking is always safe: nothing happens on a space until you press Enter there. An enemy
 blocks the way past it until you fight it, and the mod tells you so.
@@ -256,7 +269,7 @@ keyboard again.
 | **Back** (View, Select, Share) tapped | The game's Back button (Backspace): flee in battle |
 | **Right trigger / left trigger** | In battle: next / previous group (Tab / Shift+Tab). On the map: next / previous point of interest (period / comma) |
 | **Left stick click** | On the map: walk to the cursor (P) |
-| **Right stick click** | On the map: cursor back to your space (Space). Elsewhere: stop speech |
+| **Right stick click** | On the map: cursor back to your space and what is around it (Space). Elsewhere: stop speech |
 | **Right stick** | Review lists: up / down step through the current list, left / right change list (Ctrl + arrows) |
 
 Hold **Back** for the reading buttons (Back is only sent to the game when tapped alone):
@@ -301,7 +314,7 @@ Logs are written next to the exe and overwritten each launch:
 
 | File | Contents |
 |---|---|
-| `diceya11y.log` | Everything the mod did, every `Spoke:` line, every `Screen:` change |
+| `diceya11y.log` | Everything the mod did: every key pressed (`Key:`), every `Spoke:` line, every `Screen:` change |
 | `diceya11y-spoken.log` | Only what was said |
 | `<game folder>\diceya11y-bridge.log` | The in-game half: whether it loaded and hooked |
 
@@ -314,7 +327,8 @@ Logs are written next to the exe and overwritten each launch:
   again, or run the installer again. The log says `Waiting for the bridge pipe`.
 - **The game will not start after installing** — `lime_orig.dll` is missing or wrong.
   Verify the game files in Steam, then install again.
-- **Something reads wrong** — send `diceya11y.log`; the `Screen:` and `Spoke:` lines pin it down.
+- **Something reads wrong** — send `diceya11y.log`; the `Key:`, `Screen:` and `Spoke:` lines pin it down.
+  It is overwritten the next time the mod starts, so copy it before playing again.
 
 ## For developers
 

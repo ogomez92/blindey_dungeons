@@ -277,14 +277,20 @@ public sealed partial class CombatHandler : ScreenHandler
         // from a tall card onto the lower of two, the Witch's lower slots); leaving a small card
         // the game keeps that card's row, and OnPoll adds the vertical press (AwaitingListMove),
         // which also checks where the cursor ended up.
-        var (from, target) = (cards[at], cards[to]);
+        PressToward(ctx, cards[at], cards[to]);
+        return true;   // the poll speaks the new card: its key changed and an arrow was just pressed
+    }
+
+    /// <summary>The d-pad press that takes the game's cursor from one card of the list to another.</summary>
+    private void PressToward(ScreenContext ctx, ListCard from, ListCard target, int attempt = 1)
+    {
         var sameColumn = Math.Abs(from.X - target.X) < 1;
         var button = sameColumn ? (target.Y > from.Y ? PadButton.Down : PadButton.Up) : (target.X > from.X ? PadButton.Right : PadButton.Left);
         if (!ctx.State.GamepadMode) ctx.Bridge.Eval("{ControlMode}.notifyGamepadInput()");
-        _wanted = new WantedCard(target.Index, target.Name, target.X, target.Y, DateTime.UtcNow, button, sameColumn ? -1 : target.Row);
+        ctx.Log($"Card list: {button} from {from.Name} to {target.Name}.");
+        _wanted = new WantedCard(target.Index, target.Name, target.X, target.Y, DateTime.UtcNow, button, sameColumn ? -1 : target.Row, attempt);
         _lastMove = _wanted;
         Press(ctx, _wanted);
-        return true;   // the poll speaks the new card: its key changed and an arrow was just pressed
     }
 
     /// <summary>One press of the d-pad button that leads to the wanted card, with the row hint the game picks stacked cards by.</summary>
@@ -298,7 +304,18 @@ public sealed partial class CombatHandler : ScreenHandler
         _pad.Down(want.Button);
         int press;
         lock (_pressLock) { _held = want.Button; press = ++_presses; }
-        _ = Task.Run(async () => { await Task.Delay(60); ReleasePress(press); });
+        // A thread of its own, not the thread pool: held past ~300 ms the game repeats the button
+        // by itself and moves a second card, and a pool timer can run that late when the pool is
+        // busy. Suspected behind a skipped card in a play-test (2026-10-22); the log says so if it happens.
+        var log = ctx.Log;
+        var downAt = DateTime.UtcNow;
+        new Thread(() =>
+        {
+            Thread.Sleep(60);
+            var held = (DateTime.UtcNow - downAt).TotalMilliseconds;
+            if (held > 200) log($"Card list: {want.Button} was held {held:0} ms; the game may have moved twice.");
+            ReleasePress(press);
+        }) { IsBackground = true, Name = "DiceyA11y card press" }.Start();
     }
 
     private readonly object _pressLock = new();
@@ -434,9 +451,22 @@ public sealed partial class CombatHandler : ScreenHandler
             return true;
         }
         _wanted = null;
+        var (cards, at) = ListCards(ctx);
+        // Both presses landed: the first one late, and the second carried the cursor past the
+        // card. A play-test heard the click twice and the Shovel skipped (Warrior, 2026-10-22);
+        // dropping a card the game did take would hide it for the rest of the turn. Once back.
+        var wanted = cards.FindIndex(c => c.Index == want.Index);
+        var forward = want.Button is PadButton.Right or PadButton.Down;
+        if (!want.Stepped && wanted >= 0 && at >= 0 && (forward ? at > wanted : at < wanted))
+        {
+            ctx.Log($"Card list: the cursor went past {want.Name} to {name.AsString()}; going back.");
+            PressToward(ctx, cards[at], cards[wanted], attempt: 2);
+            _wanted = _wanted! with { Stepped = true };
+            return true;
+        }
         _refused.Add(want.Index);
         ctx.Log($"Card list: the game kept the cursor on {name.AsString()} and off {want.Name} twice; left out of the list this turn.");
-        var (cards, at) = ListCards(ctx);
+        (cards, at) = ListCards(ctx);
         var here = TextCleanup.Join(DescribeFocusBrief(ctx).TrimEnd('.', ' '), ListPosition(cards.Count, at));
         if (here.Length > 0) ctx.Say(here, interrupt: true);
         return false;

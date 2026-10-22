@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DiceyA11y.Core;
+using DiceyA11y.Input;
 
 namespace DiceyA11y.Screens;
 
@@ -34,6 +35,14 @@ public sealed partial class LevelUpHandler : CardScreenHandler
 
     private string _state = "";
     private bool _leveled, _rewardsSaid;
+    private DateTime _stateSince = DateTime.MinValue;
+
+    /// <summary>The card and gadget of the Inventor's choice, said once the screen moves on.</summary>
+    private (string Card, string Gadget)? _scrapped;
+    private DateTime _scrappedAt;
+
+    /// <summary>States that open with a heading ("Choose a reward!") and then buttons.</summary>
+    private static readonly HashSet<string> ChoiceStates = new() { "chooseoptionalrewards", "inventorgadgets", "finderskeepers" };
 
     public override bool Handles(string scene) => scene == "states.LevelUpScreen";
 
@@ -46,6 +55,7 @@ public sealed partial class LevelUpHandler : CardScreenHandler
     {
         _state = "";
         _rewardsSaid = false;
+        _scrapped = null;
         _leveled = ctx.Bridge.Eval(Screen + ".leveledup").AsBool();
         base.OnEnter(ctx);
     }
@@ -80,8 +90,15 @@ public sealed partial class LevelUpHandler : CardScreenHandler
         var v = ctx.Bridge.Batch(Screen + ".state", Screen + ".leveledup", Screen + ".giveexp",
                                  Screen + ".lastbattleexpreward", Screen + ".lastbattlegoldreward", Screen + ".nextlevelexp");
         var state = v[0].AsString();
+        if (state != _state) _stateSince = DateTime.UtcNow;
         _state = state;   // before the base poll: ShouldSpeak and DescribeFocus go by it
-        base.OnPoll(ctx);
+
+        if (_scrapped is { } scrapped && (state != "inventorgadgets" || DateTime.UtcNow - _scrappedAt > TimeSpan.FromSeconds(3)))
+        {
+            if (state != "inventorgadgets") ctx.SayEvent(Strings.T("scrap.done", scrapped.Card, scrapped.Gadget));
+            _scrapped = null;
+        }
+        if (!Holding(ctx)) base.OnPoll(ctx);
 
         // The stars are handed over one by one; what is still needed is only right once they all are.
         if (state == "gainxp" && !_rewardsSaid && v[2].AsInt() == 0 && v[3].Exists)
@@ -92,6 +109,32 @@ public sealed partial class LevelUpHandler : CardScreenHandler
         }
 
         if (v[1].AsBool() && !_leveled) { _leveled = true; ctx.SayEvent(Strings.T("levelup.leveled")); }
+    }
+
+    /// <summary>
+    /// Nothing is read for a moment while the screen changes over. A new state's heading
+    /// ("Choose a reward!") slides in after its buttons register, and was heard after the first
+    /// Take. And once a gadget is chosen, its buttons stay focused while they slide away: the
+    /// choice was read again as "1 of 6" before the rewards came, and as "Pea Gun, 1 of 3" on the
+    /// way back to the map.
+    /// </summary>
+    private bool Holding(ScreenContext ctx)
+    {
+        if (_scrapped != null || _state == "finished") return true;   // finished: the map follows at once
+        if (!ChoiceStates.Contains(_state)) return false;
+        var since = DateTime.UtcNow - _stateSince;
+        return since < TimeSpan.FromMilliseconds(600) || since < TimeSpan.FromMilliseconds(1500) && !ctx.Stage.Settled;
+    }
+
+    /// <summary>A gadget's button destroys its card at once: remember which, to say it when the screen moves on.</summary>
+    public override bool OnKey(ScreenContext ctx, NavKey key)
+    {
+        if (key == NavKey.Confirm && _state == "inventorgadgets" && ctx.State.Focus is { } button && FocusedCard(ctx) is var index and >= 0)
+        {
+            _scrapped = (CardText.Name(ctx, Cards[index].Expression), button.Label);
+            _scrappedAt = DateTime.UtcNow;
+        }
+        return base.OnKey(ctx, key);
     }
 
     /// <summary>A reward that is not a card: the caption drawn in the focused button's column.</summary>
@@ -148,7 +191,10 @@ public sealed partial class LevelUpHandler : CardScreenHandler
         => base.ShouldSpeak(ctx, p) && !Multiplier().IsMatch(p.Text) && p.Y < 2100   // below: the map's status strip
            && !(_state == "inventorgadgets" && p.Y > 1400)                              // gadget captions: read with their button
            && !(RequiredReward && p.Y > 150 && p.Y < 1700)                                 // the reward's words: read with Take (the button registers a poll after them)
-           && !p.Text.TrimEnd().EndsWith(':');                                          // "Next level:" labels a row of stars
+           && !p.Text.TrimEnd().EndsWith(':')                                           // "Next level:" labels a row of stars
+           && !(_leveled && Letters(p.Text) == Letters(Strings.T("levelup.leveled"))); // the drawn "LEVEL UP": said already
+
+    private static string Letters(string text) => new(text.Where(char.IsLetter).Select(char.ToUpperInvariant).ToArray());
 
     public override string DescribeContext(ScreenContext ctx)
         => TextCleanup.JoinSentences(DungeonHandler.PlayerStatus(ctx), base.DescribeContext(ctx));

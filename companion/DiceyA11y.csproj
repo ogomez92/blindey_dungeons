@@ -10,7 +10,7 @@
     <AssemblyName>DiceyA11y</AssemblyName>
     <RootNamespace>DiceyA11y</RootNamespace>
     <!-- The release workflow refuses a tag that does not match this. -->
-    <Version>1.2.4</Version>
+    <Version>1.6.0</Version>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!--
@@ -51,17 +51,24 @@
     prism.dll is a NATIVE library. It is copied next to the built exe and loaded
     explicitly by full path (see Speech/PrismNative.Load) because the exe's own
     directory is not always on the DLL search path when launched via Steam.
+    Published explicitly beside the single-file exe: left to PreserveNewest, an incremental
+    publish skipped it and package_release.ps1 failed with "prism.dll did not reach the
+    publish output" (2026-10-16).
   -->
   <ItemGroup>
     <None Include="$(PrismDir)\dynamic\release\bin\prism.dll"
           Condition="'$(PrismDir)' != '' AND Exists('$(PrismDir)\dynamic\release\bin\prism.dll')">
       <Link>prism.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </None>
     <None Include="C:\Users\Nitropc\code\libs\prism\prism-windows-x64\dynamic\release\bin\prism.dll"
           Condition="'$(PrismDir)' == '' AND Exists('C:\Users\Nitropc\code\libs\prism\prism-windows-x64\dynamic\release\bin\prism.dll')">
       <Link>prism.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </None>
   </ItemGroup>
 

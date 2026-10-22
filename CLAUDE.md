@@ -316,15 +316,22 @@ of arrows picks (`_fork`). Direction words go by the signs of the offset, not it
 "up right" is always Up and Right in either order. (A first version searched a cone for
 the nearest node; an exit spoken as "up right" lies 27 degrees above the horizontal and did
 not answer to Up, which the player rightly called unreliable.) Comma/period cycle the points
-of interest (non-empty spaces: exits first, then the rest with Dijkstra routes that avoid
+of interest (non-empty spaces: the player's own space first when something is on it - left out,
+a player who reached the exit and looked around had to walk away to find it again - then exits, then the rest with Dijkstra routes that avoid
 fights; empty neighbours were once in the cycle and sounded like "empty spaces marked as
-POIs"), Space snaps the cursor back, P walks to the cursor one stick push per landed step
+POIs"), Space snaps the cursor back and says the player's exits (players got lost and asked for
+"what is around me"), M marks the space under the cursor and G jumps the cursor to the mark
+(`_mark` = "floor|node", so another floor ignores it; named only in the cursor's own
+description, not in every step of a walk), P walks to the cursor one stick push per landed step
 (any key, a menu or a blocking enemy ends it), Enter walks when the cursor is one step away
 and is the game's A on the player's own node. An enemy blocks onward movement until fought;
 a step that goes nowhere is announced, and when the block is an enemy the cursor snaps to
 the player's space (`_blockedOn`) so Enter is the fight, not "that is 3 steps away". (This replaced a Left/Right-destination, Up-to-step scheme
 after the first blind play-test.) Chest contents (`GraphNode.item`) are deliberately never spoken:
-they are not shown on screen.
+they are not shown on screen. A used stop changes type: an opened chest and a beaten enemy
+become EMPTY (seen 2026-10-16), so the comma/period cycle is what is left on the floor. The
+first map of a session says once that comma/period, Space and F1 exist (`map.hint`): a
+play-test showed players walking whole floors by the arrows alone, not knowing them.
 
 **Battle (`CombatHandler` + `BattleNarrator`)** — `states.Combat` statics:
 `gamepad_selectedequipment` (cursor on a card), `gamepad_dicemode`, `gamepad_hoverdice`,
@@ -366,6 +373,14 @@ for one frame after the cursor left the panel. `Press` releases the previous pre
 next one: a second Down while the button was still held moved nothing. `CardListActive` reads
 the focused button fresh: with the poll's copy, an arrow just after leaving the Inventor's gadget
 went to the game's own d-pad, which wraps, and repeats on its own after ~300 ms held (measured).
+**Two presses that both landed (2026-10-22, "Right from Sword clicked twice and skipped the
+Shovel").** Cause not pinned down; two candidates are handled. When the retry's second press
+carries the cursor past the wanted card (the first press only landed late), `AwaitingListMove`
+presses once back toward it instead of refusing it. And the 60 ms release runs on a thread of
+its own, not the thread pool: held past ~300 ms the game repeats the button by itself. The log
+names every move (`Card list: Right from Sword to Shovel.`), every key (`Key: Right`, from
+`Program.NavDown`), a step back, and a release later than 200 ms. The step back has not been seen
+in a real fight (needs three cards and a late press).
 `tools/rapidkeys.py` types arrows through the hook's own queue (dev command `press <Key> <ms>`)
 at chosen gaps and checks where the cursor ends. Old code: 3 wrong in 26 runs. New: 0 in 68,
 across Inventor, Robot, Thief and Jester. Keys stay with the game in
@@ -399,7 +414,12 @@ card cursor entirely (`_paused`); its buttons stay registered for a moment after
 explained once per battle with its own rules text (`StatusInfo.Description`, from
 `status[i].description`): "You frozen" alone told the player nothing.
 
-**After a battle (`LevelUpHandler`)** — rewards are drawn as star and coin pictures, so
+**After a battle (`LevelUpHandler`)** — the base poll is skipped for 0.6-1.5 s when a choice
+state begins (its heading slides in after its buttons register: "Take" was heard before
+"Choose a reward!"), from the Inventor's A on a gadget until the state moves on (the chosen
+buttons stay focused while sliding away and were re-read as "1 of 6"; then "X destroyed. Your
+new gadget is Y" is said), and in `finished`. The drawn "LEVEL UP" is muted after the mod's own
+"Level up!". Rewards are drawn as star and coin pictures, so
 `LevelUpScreen.lastbattleexpreward`, `lastbattlegoldreward`, `nextlevelexp` are read (once
 `giveexp` is 0, or the "to next level" figure is stale). `state` walks `gainxp` →
 `chooserequiredrewards` → `chooseoptionalrewards` → (`inventorgadgets`) → `finished`. What
@@ -418,11 +438,23 @@ x-span contains it (the game's own rule in `Equipment.showgamepadhighlight`). Bu
 
 **Grids without buttons** — `BackpackHandler` (`states.Backpack.gamepad_column/row/
 inbackpack`, `Inventory.backpack` / `Inventory.equipmentslots`, `getitem(c,r).equipment`,
-held card `Game.active_collectible`), `BlacksmithHandler` (same cursor, `upgradefrom`,
+held card `Game.active_collectible`; equipped is 3x2, the backpack 4x5; a large card,
+`Equipment.size` 2, is stored in `contents[c][top]` only while `getitem(c, top+1)` returns it
+too, and the game's cursor reaches its lower half by Up's wrap, so both halves are "column 1,
+rows 1 and 2" and moving between them says "Still Sword": a player heard one Sword as two
+slots), `BlacksmithHandler` (same cursor, `upgradefrom`,
 `upgradedversion`, result popup = `numbought > 0`), `SpellbookHandler`
 (`ViewSpellbook.selectedspellindex`, `selectedequipment`, `precastequipment`,
 `elements.Spellbook.spells`), `DeckHandler` (`ViewDeck.targetscrollposition`; the card is
-read off the middle column of the stage), `ChallengeHandler` (`currentmonsterindex`).
+read off the middle column of the stage), `ChallengeHandler` (`currentmonsterindex`; the enemy and "n of 53" are said from state as
+the index changes, the drawn task once the stage is still: waiting for the stage first cost
+530 ms an arrow and players called the menu sluggish; now ~70 ms, the task ~450 ms).
+**The Witch's spell pickup** (`PickupHandler`, `PickupEquipment.witchmode`): the book is drawn
+on the right and Up/Down move `ViewSpellbook.selectedspellindex` over its six pages; no nav
+button exists (A Learn spell, B Ignore it, LB the upgraded preview, told apart only by the "+"
+on the drawn title since `witchupgradeditem` sits where the found card is). Pages are spoken
+"Page 5 of 6, empty. Enter writes Nudge here"; the page text on the stage is muted. Read as
+loose text before, empty pages were silent and a player could not put a spell on page 5.
 
 **Screens the mod had to extend** — `ModsHandler` adds a virtual list because the game's
 mod lists are mouse-only (it edits `Modmode.modlist` / `loadlist`, which the screen
@@ -602,6 +634,14 @@ Intel Macs.
 ---
 
 ## 10. Releases and the installer
+
+**Distribution since v1.5.0 (2026-10-16): offline installers on Patreon.** The repo is
+private, so the online installer's release check gets a 404 and offers only Uninstall. Build
+the zip locally (`tools/package_release.ps1 -GameDir <game> -PrismDir <prism folder>`), then
+`build_offline_dicey.bat <zip> v<version>` in the shared installer folder: the zip is built into
+`DiceyDungeonsAccessibilityInstaller-v<version>-offline.exe`, which installs or updates to
+exactly that version. The README (shipped as readme.html) points players to Patreon, never to
+GitHub releases.
 
 Repository: `gomods1/dicey` (private). Its root is the folder *above* this one: it holds
 `DiceyA11y/` and the ignored `game_src/`; `.gitignore` sits there too, and its rules are

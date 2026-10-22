@@ -390,6 +390,8 @@ public static class Program
         Map(Keys.Comma, PadButton.A, NavKey.PreviousItem);
         Map(Keys.Period, PadButton.A, NavKey.NextItem);
         Map(Keys.Letter('P'), PadButton.A, NavKey.Path);
+        Map(Keys.Letter('M'), PadButton.A, NavKey.Mark);
+        Map(Keys.Letter('G'), PadButton.A, NavKey.GoToMark);
 
         // In battle Tab / Shift+Tab move between groups (the enemy's cards, the status effects,
         // your actions); Up and Down move between the items of a group while the card list has
@@ -534,6 +536,8 @@ public static class Program
 
     private static void NavDown(NavKey nav)
     {
+        // Players send this log with their reports: what they pressed is half of it.
+        _log.Write($"Key: {nav}");
         _screens.NoteInput();
         if (_screens.HandleKey(nav)) return;
         if (!PadFor.ContainsKey(nav)) return;

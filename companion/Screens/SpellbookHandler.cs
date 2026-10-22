@@ -102,7 +102,7 @@ public sealed class SpellbookHandler : ScreenHandler
     }
 
     /// <summary>A double spell's page shows two dice of its number (Spell.requirements has two entries): it takes two dice to cast.</summary>
-    private static string? Double(ScreenContext ctx, int index)
+    public static string? Double(ScreenContext ctx, int index)
         => ctx.Bridge.Eval($"{Book}.spells[{index}].requirements.length").AsInt() == 2 ? Strings.T("witch.double", index + 1) : null;
 
     private static string DescribeSlot(ScreenContext ctx)
