@@ -660,7 +660,10 @@ hand builds the zip as an artifact without releasing.
 
 - **The runner has no game.** `bridge/build.ps1` then builds from the committed
   `bridge/lime_exports.txt` (export names only); with the game present it regenerates that
-  file, so commit it when it changes. Prism comes from the `ethindp/prism` release pinned
+  file, so commit it when it changes. The bridge holds none of Lime's code: it forwards every
+  export to the player's own `lime_orig.dll`, so the names are all it needs. A runner-built
+  bridge was first run in the real game on 2026-10-22 (v1.6.1, swapped in by the launcher):
+  it connected, created the virtual pad and read the title. Prism comes from the `ethindp/prism` release pinned
   (version + SHA-256) at the top of the workflow.
 - **Zip layout**: everything under `DiceyA11y/`, extracted into the game folder. The bridge
   travels as `DiceyA11y/bridge/lime.ndll`; it is never extracted over the game's file.
