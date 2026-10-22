@@ -21,3 +21,6 @@ companion/Mac/bin/
 
 # macOS Finder metadata
 .DS_Store
+
+# Offline installers built next to the zip
+*-offline.exe
